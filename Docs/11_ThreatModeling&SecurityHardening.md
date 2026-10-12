@@ -195,42 +195,52 @@ A control is marked verified only when supported by test evidence. Verification 
 |---|---|---|---|
 | HR-01 | SHA-256 verification | Firmware digest comparison, mismatch rejection, and fallback behavior are implemented and tested. | **Implemented and verified. No additional action identified.** |
 | HR-02 | Metadata validation | `Metadata_Validate()` checks the metadata pointer, magic value, non-zero image size, address arithmetic overflow, and image-region boundary. Digest, version, and state checks are handled by the relevant validation logic. | **Implemented.** Add or confirm maximum-size and one-byte-over-boundary test coverage in the Unit Testing task. |
-| HR-03 | Staging-area boundary | The staging area is 64 KB, while Slot A and Slot B each have 128 KB capacity. The metadata size check rejects images beyond the supplied region boundary. | **Review required:** Confirm the update/programming path rejects oversized data before writing beyond the staging boundary. The staging workflow cannot accommodate an image larger than 64 KB without a different update arrangement. |
+| HR-03 | Staging-area boundary | The staging area is 64 KB, while Slot A and Slot B each have 128 KB capacity. The metadata size check rejects images beyond the supplied region boundary. | **Hardening implemented; verification pending.** |
 | HR-04 | Metadata sequence handling | The append mechanism derives the next sequence number from the previous record and increments it. Record-selection logic ignores duplicate or lower sequence numbers as described by the implementation. | **Implemented; edge-case review required:** Confirm handling of sequence-number overflow and incomplete or invalid records. |
-| HR-05 | Flash erase/program failure handling | Flash erase and programming operations are used throughout the update workflow. | **Review required:** Confirm operation return values are checked and failures prevent unsafe state transitions, candidate promotion, or acceptance of incomplete metadata. |
+| HR-05 | Flash erase/program failure handling | The bootloader checks erase and programming results, preserves VALIDATED state after a programming failure, and propagates metadata-write and readback failures. | **Caller-side error handling implemented; low-level flash unlock, erase-error reporting, and metadata commit handling require final review.** |
 | HR-06 | Application handover | Stack-pointer and reset-handler validation are implemented. Slot-specific addresses are important because the staging and destination addresses differ. | **Implemented and verified. No additional action identified.** |
 | HR-07 | Update recovery and rollback | Incomplete-transfer recovery, metadata state transitions, candidate validation, and rollback behavior have been implemented and tested. | **Implemented and verified. No additional action identified.** |
 | HR-08 | Host/device image consistency | Host-side image preparation uses `--gap-fill=0xFF` to match the expected flash representation. Staging and destination digest matching have been observed. | **Implemented and verified. No additional action identified.** |
 | HR-09 | Update-protocol input validation | Protocol-specific validation is not yet complete. | **Planned:** Review message fields, payload lengths, transfer completion, and update-state handling after protocol integration. |
-| HR-10 | Debug/programming access | Firmware integrity verification is implemented, but the current SWD/ST-LINK access configuration has not been established in this review. | **Assessment required:** Document the access configuration and its implications for the integrity-only design. |
+| HR-10 | Debug/programming access | Firmware integrity verification is implemented, but the current SWD/ST-LINK access configuration has not been established in this review. | **Assessment complete; development access retained. Residual risk documented.** |
 
 ### 6.2 Security Hardening Actions
 
-- **Image boundaries:** Use the correct exclusive end address for each region. Enforce the staging limit before flash writes, not only when validating metadata.
-- **Metadata sequences:** Preserve valid record-selection behavior and define safe handling for sequence-number overflow and incomplete records.
-- **Flash operations:** Check erase/program return values and prevent failed operations from being treated as successful updates.
-- **Application handover:** Validate execution addresses, initial stack pointer, Thumb-state bit, and vector-table configuration for the selected slot.
-- **Protocol inputs:** Apply length and state validation before incoming data can trigger flash programming or candidate acceptance.
-- **Debug access:** Record the current programming/debug access configuration and any resulting limitations.
+- **Image boundaries:** Destination-capacity and staging-source size checks have been added to `FlashStorage_ProgramImage()`. Boundary-test coverage will be addressed in the Unit Testing task.
+- **Metadata sequences:** Append logic increments the sequence number based on previous records. Review sequence-number overflow and incomplete-record handling.
+- **Flash operations:** Caller-side erase/program failure handling is implemented. Final review remains for flash-unlock return values, erase-sector error reporting, and metadata commit handling.
+- **Application handover:** SRAM range and stack alignment, reset-handler range, and Thumb-state checks are implemented and tested. The vector table is configured for the selected application through `SCB->VTOR`.
+- **Protocol inputs:** Review message fields, payload lengths, transfer completion, and update-state handling after protocol integration.
+- **Debug access:** Default SWD/ST-LINK debug and programming access is retained for development. The assessment is complete; access restrictions may be reconsidered if the design is prepared for deployment.
 
 ### 6.3 Review Status Definitions
 
-- **Implemented and verified:** The control has been implemented and tested for the relevant scenarios.
-- **Implemented:** The control exists, but specific verification or edge-case coverage remains.
-- **Review required:** Further source inspection is needed to establish whether the implementation adequately addresses the identified concern.
-- **Planned:** The required functionality has not yet been completed.
+- **Implemented:** The control exists in the current implementation.
+- **Implemented and verified:** The control has been implemented and successfully tested for the relevant scenarios.
+- **Implemented; verification pending:** The control exists, but required verification or test coverage remains incomplete.
+- **Requires review or hardening:** Further source inspection or defensive changes are needed to establish adequate protection.
+- **Planned:** The required functionality has not yet been implemented or completed.
+- **Assessment complete; residual risk documented:** The relevant configuration or limitation has been assessed, and the remaining exposure has been recorded.
 
 A review-required item is not automatically a confirmed vulnerability. It remains open until source inspection or available evidence establishes whether the control is adequate.
 
 ### 6.4 Review Outcome
 
-- Existing SHA-256 verification, digest-mismatch rejection, fallback behavior, update recovery, rollback, and host/device image consistency are recorded as implemented and verified.
-- Metadata validation and image-boundary checks are implemented. Boundary-test coverage will be addressed in the Unit Testing task.
-- Staging write limits, sequence-number edge cases, flash-operation failure handling, and specific application handover checks require focused review.
-- Protocol-specific validation remains planned until protocol integration is complete.
-- Firmware authenticity and digital-signature verification remain outside the scope of this project.
-### Integrity-Only Security Limitation
+- **Firmware integrity:** SHA-256 verification, digest-mismatch rejection, and fallback behavior are implemented and verified.
+- **Metadata validation:** Magic value, image size, arithmetic-overflow, and image-region boundary checks are implemented. Boundary-test coverage will be addressed in the Unit Testing task.
+- **Image boundaries:** Destination-capacity and staging-source size checks have been added to `FlashStorage_ProgramImage()`. Verification remains pending.
+- **Metadata sequences:** Append-based sequence handling is implemented. Sequence-number overflow and incomplete-record handling require further review.
+- **Flash operations:** The bootloader checks erase and programming results and propagates failures. Low-level unlock/erase reporting and metadata commit handling require final review.
+- **Application handover:** Stack-pointer range and alignment, reset-handler range, Thumb-state, and vector-table configuration are implemented and tested.
+- **Update recovery and rollback:** Incomplete-transfer recovery, metadata state transitions, candidate validation, and rollback behavior are implemented and tested.
+- **Host/device consistency:** Firmware image preparation and SHA-256 verification use the corrected image representation, including `0xFF` padding. The relevant verification results have been confirmed.
+- **Update protocol:** Protocol-specific input validation remains planned until integration and review are complete.
+- **Debug/programming access:** Default SWD/ST-LINK access is retained for development. The associated exposure has been assessed and will remain a documented limitation.
+- **Project scope:** Firmware authenticity and digital-signature verification are outside the scope of this project.
 
-SHA-256 verification compares the calculated firmware digest against the expected digest stored in metadata. If an attacker can modify both the firmware and the expected digest, this comparison alone does not establish firmware authenticity.
+### 6.5 Integrity-Only Security Limitation
 
-Digital signatures and signing-key management are outside the scope of this project. This limitation will be considered when recording residual risks, without expanding this story into firmware authentication.
+SHA-256 verification compares the calculated firmware digest against the expected digest stored in metadata. If an attacker can modify both the firmware and its expected digest, this comparison alone does not establish firmware authenticity.
+
+Digital signatures and signing-key management are outside the scope of this project. This limitation is documented to clarify the security properties of the integrity-only design; it does not require implementing a firmware-authentication mechanism.
+
