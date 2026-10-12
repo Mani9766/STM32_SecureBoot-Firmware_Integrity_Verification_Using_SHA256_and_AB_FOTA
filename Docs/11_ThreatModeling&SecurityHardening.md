@@ -140,3 +140,53 @@ The attack surfaces listed above are potential points of influence, not confirme
 - Firmware authenticity is outside the project scope. SHA-256 comparison alone cannot establish authenticity if both an image and its expected digest can be modified.
 - Protocol-specific scenarios will be refined after update-protocol integration.
 - Threat severity and control effectiveness will be assessed during security control mapping, source-code review, hardening, and testing.
+
+## 5. Threats and Security Controls Mapping
+
+### Threat-to-Control Mapping
+
+| Threat ID | Security Controls | Control Status |
+|---|---|---|
+| TH-01 | Calculate the firmware SHA-256 digest and compare it with the expected digest in metadata before execution. | Implemented and verified. |
+| TH-02 | Validate metadata magic value, image size, digest, version, state, and applicable sequence fields before use. | Review validation and rejection paths. |
+| TH-03 | Validate image start address, image size, end address, and permitted slot boundaries before accessing image contents. | Review boundary and overflow checks. |
+| TH-04 | Treat digest mismatches and SHA-256 calculation errors as validation failures; reject the image and follow the defined fallback or fail-safe path. | Review error handling and fallback behavior. |
+| TH-05 | Verify the image at its destination slot after copying from staging. Use the destination address and intended image size for validation. | Review destination verification and address handling. |
+| TH-06 | Keep staged firmware in the pending-validation state until the complete image has been received and validated. Reject incomplete or invalid images. | Review update-completion and state-transition handling. |
+| TH-07 | Check flash erase/program operation results. Use valid metadata commit/state handling so interrupted operations do not produce an accepted, inconsistent record. | Review failure handling and metadata recovery. |
+| TH-08 | Validate the initial stack pointer, reset-handler address, Thumb-state bit, and application vector-table configuration before handover. | Review handover checks and slot-specific addresses. |
+| TH-09 | Validate metadata states and enforce the permitted transitions for candidate validation, trial boot, confirmation, invalidation, and rollback. | Review transition logic and recovery paths. |
+| TH-10 | Apply the implemented firmware version policy and reject versions disallowed by that policy. Do not treat a version field alone as strong anti-rollback protection. | Version checks in scope; anti-rollback limitations remain. |
+| TH-11 | Ensure host-side metadata generation and bootloader verification use the same image bytes, image size, and padding convention. | Review against the existing host tool and verification code. |
+| TH-12 | Restrict erase and programming operations to the intended flash sectors and slot boundaries. Check operation results and reject invalid target ranges. | Review sector selection and flash error handling. |
+| TH-13 | Validate protocol message fields, payload lengths, transfer completion, and update state before programming or accepting firmware. | Protocol integration and validation required. |
+| TH-14 | Verify firmware integrity before execution and assess the exposure of debug/programming access. Recognize that modifying both firmware and its expected digest may defeat integrity-only verification. | Integrity checking in scope; authenticity is out of scope. |
+
+### Security Control Principles
+
+- **Firmware integrity:** SHA-256 digest comparison detects modifications that cause a mismatch with the expected digest.
+- **Metadata validation:** Metadata fields must be validated before they influence image verification, slot selection, or execution.
+- **Memory safety:** Image addresses and sizes must remain within the permitted flash region, with checks that prevent arithmetic overflow.
+- **Update recovery:** Incomplete writes and failed flash operations must not result in invalid firmware being accepted as a valid candidate.
+- **Destination validation:** The image that will execute must be validated at its actual destination address, not merely at the staging address.
+- **Application handover:** A matching firmware digest does not replace the need for stack-pointer, reset-handler, and vector-table validation.
+- **Version policy:** Version checks must follow the intended selection policy. They do not independently guarantee protection against restoration of older firmware and corresponding metadata.
+- **Host/device consistency:** Firmware packaging and device-side verification must agree on the precise byte range covered by SHA-256.
+- **Protocol validation:** Incoming data must be validated before it can influence flash programming or firmware state transitions.
+
+### Control Verification Status
+
+Control effectiveness will be established through source-code review and targeted tests.
+
+- **Implemented:** The control exists in the current implementation.
+- **Verified:** Test evidence demonstrates that the control behaves as intended for the tested scenarios.
+- **Requires review or hardening:** The control needs further source inspection or defensive checks.
+- **Planned:** The control depends on work that has not yet been implemented, including protocol-specific validation.
+
+No control will be marked verified solely because it is present in the source code.
+
+### Integrity-Only Security Limitation
+
+SHA-256 verification compares the calculated firmware digest against the expected digest stored in metadata. If an attacker can modify both the firmware and the expected digest, this comparison alone does not establish firmware authenticity.
+
+Digital signatures and signing-key management are outside the scope of this project. This limitation will be considered when recording residual risks, without expanding this story into firmware authentication.
