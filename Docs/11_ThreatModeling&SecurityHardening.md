@@ -196,8 +196,8 @@ A control is marked verified only when supported by test evidence. Verification 
 | HR-01 | SHA-256 verification | Firmware digest comparison, mismatch rejection, and fallback behavior are implemented and tested. | **Implemented and verified. No additional action identified.** |
 | HR-02 | Metadata validation | `Metadata_Validate()` checks the metadata pointer, magic value, non-zero image size, address arithmetic overflow, and image-region boundary. Digest, version, and state checks are handled by the relevant validation logic. | **Implemented.** Add or confirm maximum-size and one-byte-over-boundary test coverage in the Unit Testing task. |
 | HR-03 | Staging-area boundary | The staging area is 64 KB, while Slot A and Slot B each have 128 KB capacity. The metadata size check rejects images beyond the supplied region boundary. | **Hardening implemented; verification pending.** |
-| HR-04 | Metadata sequence handling | The append mechanism derives the next sequence number from the previous record and increments it. Record-selection logic ignores duplicate or lower sequence numbers as described by the implementation. | **Implemented; edge-case review required:** Confirm handling of sequence-number overflow and incomplete or invalid records. |
-| HR-05 | Flash erase/program failure handling | The bootloader checks erase and programming results, preserves VALIDATED state after a programming failure, and propagates metadata-write and readback failures. | **Caller-side error handling implemented; low-level flash unlock, erase-error reporting, and metadata commit handling require final review.** |
+| HR-04 | Metadata sequence handling | The append mechanism derives the next sequence number from the previous record and increments it. Record-selection logic ignores duplicate or lower sequence numbers as described by the implementation. | **Implemented; confirm verification status against existing test evidence.** |
+| HR-05 | Flash erase/program failure handling | The bootloader checks erase and programming results, propagates metadata-write and readback failures, verifies programmed metadata words, and programs the commit marker last. Flash unlock-result checks have been added. | **Implementation review complete; verification evidence pending in the Unit Testing task.** |
 | HR-06 | Application handover | Stack-pointer and reset-handler validation are implemented. Slot-specific addresses are important because the staging and destination addresses differ. | **Implemented and verified. No additional action identified.** |
 | HR-07 | Update recovery and rollback | Incomplete-transfer recovery, metadata state transitions, candidate validation, and rollback behavior have been implemented and tested. | **Implemented and verified. No additional action identified.** |
 | HR-08 | Host/device image consistency | Host-side image preparation uses `--gap-fill=0xFF` to match the expected flash representation. Staging and destination digest matching have been observed. | **Implemented and verified. No additional action identified.** |
@@ -244,3 +244,47 @@ SHA-256 verification compares the calculated firmware digest against the expecte
 
 Digital signatures and signing-key management are outside the scope of this project. This limitation is documented to clarify the security properties of the integrity-only design; it does not require implementing a firmware-authentication mechanism.
 
+## 7. Residual Risks and Limitations
+
+### 7.1 Residual Risk Register
+
+| Risk ID | Risk / Limitation | Assessment | Action |
+|---|---|---|---|
+| RSK-01 | Integrity-only verification | SHA-256 detects a digest mismatch, but coordinated modification of firmware and its expected digest may go undetected. | Accepted limitation. Firmware authenticity is outside project scope. |
+| RSK-02 | Debug/programming access | Default SWD/ST-LINK access is retained for development and may permit firmware or metadata modification, depending on access available. | Documented development limitation. Reassess before deployment. |
+| RSK-03 | Staging capacity | The staging region is 64 KB, while Slot A and Slot B each have 128 KB capacity. The existing staging workflow is limited by the staging-region capacity. | Enforce the staging boundary. Larger images require a different update arrangement. |
+| RSK-04 | Metadata-sector rollover | Power loss after a full metadata sector is erased but before a new valid record is committed may leave the previous journal records unavailable. | Documented limitation; robust recovery during rollover is outside current scope. |
+| RSK-05 | Boundary and flash-failure test evidence | Boundary checks and flash-operation error handling are implemented or hardened, but relevant verification evidence remains to be recorded. | Complete the outstanding cases in the Unit Testing task. |
+| RSK-06 | Update-protocol validation | Protocol-specific input validation has not yet been fully reviewed because protocol integration is pending. | Review protocol inputs, length checks, transfer completion, and state handling after integration. |
+| RSK-07 | Rollback versus anti-rollback | Slot-based rollback restores the previously active firmware after candidate failure. It does not by itself prevent restoration of an older firmware image with matching metadata. | Documented limitation. Do not claim strong anti-rollback protection. |
+
+### 7.2 Mitigated Threats
+
+The following protections are implemented and tested for the scenarios covered by the existing tests:
+
+- SHA-256 firmware integrity verification and digest-mismatch rejection.
+- Destination-image verification after staging-to-slot programming.
+- Metadata validation, including magic value, image size, arithmetic overflow, and region boundaries.
+- Firmware version checks and metadata-state validation.
+- Application handover checks for stack-pointer range and alignment, reset-handler range, Thumb state, and vector-table configuration.
+- Incomplete-transfer recovery and retry behavior.
+- Candidate validation, trial boot, confirmation, and rollback.
+- Host/device image consistency using the corrected binary padding convention.
+- Flash-operation failure propagation and metadata record commit-marker verification.
+
+### 7.3 Pending Verification and Follow-Up
+
+- Complete the outstanding boundary and flash-operation tests in the Unit Testing task.
+- Retain the sequence-number overflow handling already implemented in the metadata code.
+- Review protocol-specific input validation after protocol integration.
+- Reassess SWD/ST-LINK access restrictions if the project moves toward deployment.
+
+These follow-up items do not imply that the corresponding implemented controls are absent. Verification status must reflect the existing implementation and available test evidence.
+
+### 7.4 Overall Assessment
+
+The project implements firmware integrity verification using SHA-256 with metadata validation, A/B firmware slots, staged updates, application handover checks, and rollback recovery.
+
+The threat model identifies the relevant attack surfaces, defines firmware-integrity threat scenarios, maps those threats to existing controls, and records remaining verification work and limitations.
+
+Firmware authenticity, digital-signature verification, and signing-key management are outside the scope of this project. The assessment does not claim formal security certification or protection against every possible attack or failure scenario.
