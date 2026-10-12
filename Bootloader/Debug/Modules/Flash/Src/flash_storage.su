@@ -1,4 +1,4 @@
-../Modules/Flash/Src/flash_storage.c:11:19:FlashStorage_EraseSector	48	static
-../Modules/Flash/Src/flash_storage.c:33:19:FlashStorage_ProgramMetadata	40	static
-../Modules/Flash/Src/flash_storage.c:72:19:FlashStorage_ReadMetadata	16	static
-../Modules/Flash/Src/flash_storage.c:88:19:FlashStorage_ProgramImage	56	static
+../Modules/Flash/Src/flash_storage.c:12:19:FlashStorage_EraseSector	48	static
+../Modules/Flash/Src/flash_storage.c:68:19:FlashStorage_ProgramMetadata	40	static
+../Modules/Flash/Src/flash_storage.c:107:19:FlashStorage_ReadMetadata	16	static
+../Modules/Flash/Src/flash_storage.c:123:19:FlashStorage_ProgramImage	64	static

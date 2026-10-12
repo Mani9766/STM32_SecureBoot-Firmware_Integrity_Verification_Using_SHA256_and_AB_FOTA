@@ -5,4 +5,4 @@
 ../Modules/Metadata/Src/metadata.c:115:13:Metadata_IsRecordErased	4
 ../Modules/Metadata/Src/metadata.c:141:13:Metadata_FindNextRecordAddress	5
 ../Modules/Metadata/Src/metadata.c:173:6:Metadata_ReadLatestRecord	7
-../Modules/Metadata/Src/metadata.c:219:19:Metadata_WriteRecord	13
+../Modules/Metadata/Src/metadata.c:219:19:Metadata_WriteRecord	15

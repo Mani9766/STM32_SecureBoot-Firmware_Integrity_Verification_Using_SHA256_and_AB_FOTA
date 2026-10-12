@@ -338,7 +338,12 @@ HAL_StatusTypeDef Metadata_WriteRecord(
      * It is programmed last.
      */
 
-    HAL_FLASH_Unlock();
+    status = HAL_FLASH_Unlock();
+
+    if (status != HAL_OK)
+    {
+        return status;
+    }
 
     /*
      * Program sequence + metadata + CRC.
@@ -408,7 +413,12 @@ HAL_StatusTypeDef Metadata_WriteRecord(
         return HAL_ERROR;
     }
 
-    HAL_FLASH_Lock();
+    status = HAL_FLASH_Lock();
+
+    if (status != HAL_OK)
+    {
+        return status;
+    }
 
     return HAL_OK;
 }
