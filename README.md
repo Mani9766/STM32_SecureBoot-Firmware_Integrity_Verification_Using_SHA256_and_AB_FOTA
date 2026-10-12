@@ -1,261 +1,148 @@
-# STM32-Project-05-Secure-Boot
+# STM32 Secure Boot: Firmware Integrity Verification Using SHA-256 and A/B FOTA
 
-A practical implementation of a Secure Boot and dual-slot firmware update architecture for an STM32F407 embedded system.
+A practical STM32F407 project implementing a bootloader, SHA-256 firmware integrity verification, and dual-slot A/B firmware updates.
 
-The project focuses on firmware integrity verification using SHA-256, firmware metadata validation, secure application handover, A/B firmware slot architecture, and FOTA-oriented update handling.
+The project demonstrates how a bootloader can validate staged firmware, program an inactive slot, verify the programmed image, trial-boot a candidate, and confirm or roll back based on the candidate's outcome.
 
-Digital-signature-based firmware authenticity is planned as a future security extension.
+## Project Status
 
-## Project Objective
+### Implemented and functionally tested
 
-The goal of this project is to design and implement a secure firmware boot and update mechanism that verifies firmware integrity before execution and supports safer firmware replacement using two independent application slots.
+- STM32F407 bootloader and application separation.
+- Slot-specific firmware builds and memory layouts for Slot A and Slot B.
+- Firmware metadata validation, image-size and slot-boundary checks.
+- SHA-256 validation of staged firmware and programmed destination images.
+- A/B update cycling and inactive-slot selection.
+- Metadata records containing sequence information, a record CRC, and a commit marker.
+- `BOOT_PENDING` trial-boot handling and application confirmation.
+- Recovery to the previously confirmed firmware when a candidate fails to confirm, including the tested watchdog-reset scenario.
+- Fail-safe handling when the selected active firmware fails integrity verification.
+- A button-based update notification used as a demonstration substitute for an external communication trigger.
+- ITM/debugger and LED evidence for the main boot, update, integrity, confirmation, and recovery paths.
 
-The firmware architecture separates:
+### Remaining work and limitations
 
-* a download/staging area for incoming firmware
-* two bootable firmware slots
-* slot-specific firmware metadata
-* the bootloader responsible for validation, firmware promotion, and boot selection
+- Threat modeling and security-hardening review.
+- Documentation aligning relevant IEC 62443 cybersecurity practices and ISO 26262 safety concepts with the project. This is not formal certification or a full compliance assessment.
+- Final unit-test coverage review and consolidated project documentation.
+- Digital-signature verification and trusted-key management.
+- A production communication/download mechanism; the current button trigger is a demonstration substitute.
+- Additional resilience work and testing for actual power interruption during flash operations and metadata writes.
 
-The implementation is being developed incrementally, with SHA-256-based firmware integrity verification as the current security foundation.
+## Architecture Overview
 
-## Secure Boot and Firmware Update Architecture
-
-The system separates update handling from firmware execution:
+The architecture separates the incoming firmware image, bootloader decision logic, per-slot metadata, and the two executable firmware slots.
 
 ```text
-Application
-    |
-    | Detect update / receive new firmware
-    v
-Download / Staging Area
-    |
-    | Reset after update is ready
-    v
-Secure Boot / Bootloader
-    |
-    | Validate staged firmware
-    | Determine inactive slot
-    | Program inactive slot
-    | Verify programmed image
-    | Activate new slot
-    v
-Firmware Slot A or Firmware Slot B
-    |
-    | Application executes
-    |
-    +---- If update is available ----+
-    |                                |
-    +--------------------------------+
+Running application
+        |
+        | Update available (button used as demonstration trigger)
+        v
+Download / staging area
+        |
+        | Reset after staged update is ready
+        v
+Bootloader
+        |
+        +--> Read and validate metadata
+        +--> Validate staged image and version
+        +--> Select inactive firmware slot
+        +--> Erase and program destination slot
+        +--> Calculate SHA-256 of programmed image
+        +--> Append BOOT_PENDING metadata record
+        |
+        v
+Candidate slot trial boot
+        |
+        +--> Application confirms --> Append CONFIRMED record
+        |
+        +--> Candidate fails to confirm / watchdog reset
+                    |
+                    v
+             Bootloader rollback to previously confirmed slot
 ```
 
-The running application is responsible for detecting and receiving a new firmware image. The bootloader is responsible for validating the staged image, programming the inactive firmware slot, verifying the programmed image, selecting the new active slot, and controlling the boot decision.
+The current demonstration uses a button in the running application to set an update-available flag and reset the MCU. This simulates an external notification mechanism such as CAN, Bluetooth, or network-triggered FOTA. It is not itself a network or field-download implementation.
 
 ## Flash Memory Architecture
 
-```text
-STM32F407 Internal Flash
-|
-+-- Sector 0-1 : Secure Boot / Bootloader
-|
-+-- Sector 2   : Slot A Metadata
-|
-+-- Sector 3   : Slot B Metadata
-|
-+-- Sector 4   : Download / Staging Area
-|
-+-- Sector 5   : Firmware Slot A
-|
-+-- Sector 6   : Firmware Slot B
-|
-+-- Remaining  : Reserved / available Flash
-```
+The current memory layout is:
 
-### Slot Roles
+| STM32F407 region | Address / start | Purpose |
+|---|---|---|
+| Sectors 0–1 | `0x08000000`–`0x08007FFF` | Bootloader |
+| Sector 2 | `0x08008000` | Slot A metadata |
+| Sector 3 | `0x0800C000` | Slot B metadata |
+| Sector 4 | `0x08010000` | Download / staging area |
+| Sector 5 | `0x08020000` | Firmware Slot A |
+| Sector 6 | `0x08040000` | Firmware Slot B |
+| Remaining flash | From `0x08060000` onward | Reserved / available, subject to device and linker configuration |
 
-Slot A and Slot B are fixed physical firmware locations. Their runtime role changes between firmware updates.
+The metadata and firmware slots are associated with fixed physical slots. Their active and inactive roles change during the update lifecycle.
 
-For example:
+### Slot-specific firmware builds
+
+Each application image must be linked for the address at which it will execute:
 
 ```text
-Initial state
+Firmware Slot A
+    FLASH origin = 0x08020000
+    Vector table = 0x08020000
 
-Slot A : Firmware V1  → ACTIVE
-Slot B : Empty        → INACTIVE
+Firmware Slot B
+    FLASH origin = 0x08040000
+    Vector table = 0x08040000
 ```
 
-After a successful update:
+The bootloader validates the image range and uses the selected slot's start address when transferring control to the application. The application handover must use the matching vector table and reset handler.
 
-```text
-Slot A : Firmware V1  → Previous / Rollback
-Slot B : Firmware V2  → ACTIVE
-```
+## Update and Confirmation Flow
 
-The next update uses the other slot:
+1. The application stages an update and signals that it is available. In the current demonstration, a button press provides this trigger.
+2. Following reset, the bootloader reads slot metadata and staged-image metadata.
+3. The bootloader validates the staged image, including its expected size, version policy, and SHA-256 digest.
+4. The bootloader selects the inactive slot, erases it, and programs the staged image.
+5. The bootloader calculates SHA-256 over the programmed destination and compares it with the expected digest.
+6. If validation succeeds, the destination is marked `BOOT_PENDING` and selected for trial boot.
+7. The candidate application calls `Firmware_Confirm()`. Successful confirmation appends a `CONFIRMED` metadata record.
+8. If the candidate fails to confirm and the MCU resets, the bootloader detects the unconfirmed `BOOT_PENDING` state and returns to the previously confirmed firmware according to the implemented recovery policy.
 
-```text
-Slot A : Firmware V3  → ACTIVE
-Slot B : Firmware V2  → Previous / Rollback
-```
-
-The system therefore alternates between Slot A and Slot B instead of permanently assigning one slot as "active" and the other as "candidate".
-
-## Download, Validation and Promotion Flow
-
-New firmware is first stored in the dedicated download/staging region.
+### Update Flow Diagram
 
 ```mermaid
 flowchart TD
-    A[Application running] --> B{Update available?}
-    B -- No --> A
-    B -- Yes --> C[Receive new firmware]
-    C --> D[Store firmware in Sector 4 staging area]
-    D --> E[Mark update as ready]
-    E --> F[System reset]
-    
-    F --> G[Secure Boot / Bootloader]
-    G --> H[Read Slot A and Slot B metadata]
-    H --> I[Determine currently active slot]
-    I --> J[Select inactive slot]
-    
-    J --> K[Validate staged firmware]
-    K -- Invalid --> L[Reject update]
-    L --> M[Boot current confirmed slot]
-    
-    K -- Valid --> N[Erase inactive slot]
-    N --> O[Program staged firmware into inactive slot]
-    O --> P[Calculate SHA-256 of programmed slot]
-    P --> Q{Integrity verified?}
-    
-    Q -- No --> R[Reject programmed image]
-    R --> M
-    
-    Q -- Yes --> S[Mark inactive slot BOOT_PENDING]
-    S --> T[Boot new slot]
-    T --> U{Application confirms?}
-    
-    U -- Yes --> V[Mark new slot CONFIRMED]
-    V --> W[Previous slot retained for rollback]
-    W --> A
-    
-    U -- No --> X[Watchdog / reset]
-    X --> G
-    G --> Y[Detect unconfirmed BOOT_PENDING slot]
-    Y --> Z[Reject new slot and retain previous confirmed slot]
-    Z --> M
+    A[Application running] --> B[Update trigger]
+    B --> C[Staged firmware and metadata]
+    C --> D[Reset into bootloader]
+    D --> E[Validate staged metadata and SHA-256]
+    E -->|Invalid| F[Reject update and retain confirmed firmware]
+    E -->|Valid| G[Select inactive slot]
+    G --> H[Erase and program destination]
+    H --> I[Verify destination SHA-256]
+    I -->|Mismatch| F
+    I -->|Match| J[Append BOOT_PENDING record]
+    J --> K[Trial boot candidate]
+    K --> L{Candidate confirms?}
+    L -->|Yes| M[Append CONFIRMED record]
+    M --> N[New slot is confirmed]
+    L -->|No / watchdog reset| O[Detect unconfirmed candidate]
+    O --> P[Return to previously confirmed slot]
 ```
 
-### Update Flow Summary
+## Boot Decision and Fail-Safe Behavior
 
-```text
-Application
-    |
-    | Detect / receive update
-    v
-Sector 4
-Download / Staging
-    |
-    | Reset
-    v
-Secure Boot
-    |
-    | Validate staged firmware
-    v
-Determine inactive slot
-    |
-    +----------------------+
-    |                      |
-    v                      v
-Slot A inactive        Slot B inactive
-    |                      |
-    +----------+-----------+
-               |
-               v
-      Program inactive slot
-               |
-               v
-       Verify SHA-256
-               |
-               v
-          BOOT_PENDING
-               |
-               v
-       Trial boot image
-               |
-          +----+----+
-          |         |
-       Confirm    No confirm
-          |         |
-          v         v
-     CONFIRMED    Reset / rollback
-```
+On reset, the bootloader reads and validates metadata, checks the selected image's memory boundaries, calculates its SHA-256 digest, and compares the calculated digest with the metadata digest.
 
-The finalized design uses the previously confirmed slot as the fallback during trial boot. The new slot does not become the confirmed firmware until the application reaches its defined confirmation point.
+The current implementation has two distinct recovery paths:
 
-## Secure Boot Flow
+- **Candidate fails to confirm:** When a candidate is in `BOOT_PENDING` and resets before confirmation, the bootloader detects the unconfirmed candidate and rolls back to the previously confirmed firmware. This was tested with candidate firmware that intentionally skips confirmation and stops refreshing the watchdog.
+- **Selected active image fails SHA-256:** The current normal-boot path calls `Bootloader_FailSafe()` when the selected active image's digest does not match. It does **not** automatically try the alternate slot in this path. The active-image-corruption test verifies rejection and entry into the configured BootSafe/fail-safe behavior.
 
-At every MCU reset, the Secure Boot bootloader evaluates the firmware slot metadata and determines which firmware image is currently selected for execution.
+A staged-image validation failure should not result in execution of the invalid staged image. The prior confirmed firmware remains the intended boot target when it is still valid.
 
-```text
-MCU Reset
-    |
-    v
-Secure Boot
-    |
-    v
-Read Slot A metadata
-Read Slot B metadata
-    |
-    v
-Determine active slot
-    |
-    v
-Validate selected firmware metadata
-    |
-    v
-Validate application image boundaries
-    |
-    v
-Calculate firmware SHA-256
-    |
-    v
-Compare with stored SHA-256
-    |
-   +----+
-   |    |
- Valid  Invalid
-   |      |
-   v      v
-Boot     Recovery / fallback
-selected
-slot
-```
+## Firmware Metadata and Journal
 
-The bootloader independently calculates the SHA-256 digest of the selected firmware image. The application does not become trusted merely because it provides its own digest.
-
-## Firmware Slot Selection
-
-Slot selection is based on the persisted firmware state, not simply on firmware version.
-
-For example:
-
-```text
-Slot A → CONFIRMED
-Slot B → BOOT_PENDING
-```
-
-means:
-
-```text
-Current confirmed firmware = Slot A
-Trial firmware             = Slot B
-```
-
-A higher version number does not automatically make an image active. A firmware image must complete the defined activation and confirmation flow before becoming the confirmed application.
-
-## Firmware Metadata
-
-Each firmware slot has its own metadata.
+Each slot has associated firmware metadata, represented conceptually as:
 
 ```c
 typedef struct
@@ -268,237 +155,104 @@ typedef struct
 } firmware_metadata_t;
 ```
 
-Metadata is associated with the physical slot rather than with a permanent "active" or "candidate" role.
+The metadata describes the image stored in a slot. Fixed image boundaries are defined by the bootloader and linker configuration rather than trusted solely from metadata.
 
-```text
-Sector 2 → Slot A Metadata
-Sector 3 → Slot B Metadata
-```
+The metadata journal record includes:
 
-The metadata describes the firmware image stored in that slot. Fixed slot boundaries remain part of the bootloader and linker memory architecture rather than being duplicated in each metadata record.
+- A sequence number used to identify the newer record.
+- The firmware metadata payload.
+- A record CRC for corruption detection.
+- A commit marker used to distinguish a committed record from an incomplete write.
 
-## Update State Model
+New state information is appended as a new record rather than changing already-programmed flash bits in place. The bootloader uses metadata records to determine the latest valid state, including `BOOT_PENDING` and `CONFIRMED` during trial boot and confirmation.
 
-The firmware update state is being designed around the following lifecycle:
+**Limitation:** A CRC and commit marker help detect accidental corruption or incomplete records, but they do not cryptographically authenticate metadata against an attacker capable of rewriting flash. Metadata rotation and erase behavior, along with resilience to real power loss during flash operations, remain areas for further hardening and validation.
 
-```text
-EMPTY
-  |
-  v
-PENDING_VALIDATION
-  |
-  +---- validation failure ----> INVALID
-  |
-  v
-VALIDATED
-  |
-  v
-BOOT_PENDING
-  |
-  +---- confirmation failure --> INVALID / fallback
-  |
-  v
-CONFIRMED
-  |
-  v
-Previous confirmed slot retained for rollback
-```
+## Current Integrity Protection
 
-`BOOT_PENDING` represents a trial firmware image that has been selected for boot but has not yet been confirmed as a known-good application.
+The bootloader independently calculates SHA-256 over the configured image range in flash and compares it with the reference digest stored in the associated metadata. Integrity verification is performed for the staged image and again for the programmed destination image before candidate activation.
 
-The previous confirmed firmware remains available until the new image reaches the confirmation point.
+The project includes host-side metadata preparation tooling, including `Tools/prepare_slot_metadata.py`, to prepare firmware metadata from a binary image.
 
-The exact persistent state-transition mechanism and power-loss-safe metadata update strategy are part of the current development work.
+### What SHA-256 Does and Does Not Provide
 
-## Slot-Specific Firmware Builds
+SHA-256 comparison can detect a firmware image that differs from the image represented by the reference digest. By itself, it does not prove who created the firmware or whether the metadata digest came from a trusted source. If an attacker can replace both the image and its stored digest, SHA-256 alone does not provide firmware authenticity.
 
-Because Slot A and Slot B are located at different Flash addresses, each slot uses a linker configuration corresponding to its execution address.
+Digital-signature verification with a protected trust anchor is a planned security extension. It is not currently implemented.
 
-```text
-Firmware_Slot_A
-    FLASH origin = 0x08020000
-    VTOR         = 0x08020000
+## Implemented Security and Reliability Features
 
-Firmware_Slot_B
-    FLASH origin = 0x08040000
-    VTOR         = 0x08040000
-```
+- Bootloader/application memory partitioning.
+- Fixed Slot A and Slot B firmware locations.
+- Slot-specific linker and vector-table configuration.
+- Metadata magic, size, version, state, CRC, sequence, and commit-marker handling.
+- Image boundary validation.
+- Firmware version checks in the update workflow.
+- SHA-256 implementation and standard test-vector validation.
+- Staged firmware integrity validation.
+- Destination flash image integrity validation after programming.
+- Candidate trial boot and explicit application confirmation.
+- Rollback after a candidate remains unconfirmed following reset/watchdog failure.
+- Fail-safe handling when the selected active image's SHA-256 does not match.
+- Debug/ITM output and LED indications to support validation and demonstration.
 
-Both slot firmware projects use the same application functionality while being linked for their respective execution locations.
+## Validation and Test Evidence
 
-The inactive slot is selected before generating the corresponding firmware image so that the firmware is linked for the address from which it will execute.
+Functional validation has been completed for the currently defined FOTA test cases. Evidence includes ITM logs, debugger observations, firmware version/state output, and LED indications where applicable.
 
-## Current Integrity Verification
+Validation areas include:
 
-SHA-256 is used to verify firmware integrity.
+- SHA-256 test vectors, padding boundaries, single-block and multi-block inputs.
+- Firmware metadata reading, validation, append operations, sequence handling, CRC, and commit-marker checks.
+- Slot-specific image addresses and memory boundaries.
+- Staged-image validation and firmware version checks.
+- Destination erase/program and post-program SHA-256 verification.
+- Consecutive A/B updates (`A → B → A → B`).
+- Confirmation persistence and reuse of a slot for another update.
+- Interrupted destination programming followed by reset, revalidation of the staged image, and update retry.
+- Candidate not confirmed, watchdog reset, and rollback to the previously confirmed image.
+- Active-image SHA-256 mismatch and BootSafe/fail-safe entry.
+- Recovery followed by a subsequent valid update.
 
-The bootloader independently calculates the SHA-256 digest of the firmware image stored in the selected slot and compares it with the reference digest stored in that slot's metadata.
+The executed suite includes individual functional and recovery scenarios; a separate full end-to-end regression run is not claimed. Interrupted-programming evidence obtained with a debugger reset should not be described as proof of an actual power cut during a flash operation. Actual power interruption during an individual flash or metadata operation remains unverified.
 
-```text
-Firmware Image
-      |
-      v
-   SHA-256
-      |
-      v
-Calculated Digest
-      |
-      +------ Compare ------+
-                             |
-                    Stored Metadata Digest
-```
+Test evidence and detailed results are maintained separately from this overview README.
 
-A digest mismatch causes the firmware image to be rejected rather than executed.
+## Security Limitations and Future Work
 
-## Implemented Security Features
+The following items are not claimed as completed security features:
 
-* STM32 Secure Boot bootloader
-* Bootloader/application memory partitioning
-* Firmware metadata management
-* Application image boundary validation
-* Firmware version validation
-* SHA-256 implementation
-* SHA-256 standard test-vector validation
-* SHA-256 validation of firmware stored in STM32 Flash
-* Firmware integrity verification
-* Secure application handover
-* Invalid metadata handling
-* Invalid/corrupted firmware handling
-* Download/staging area
-* A/B firmware slot architecture
-* Slot-specific linker configurations
-* Slot-specific vector table configuration
+- **Firmware authenticity:** Add digital-signature verification and trusted public-key management.
+- **Anti-rollback assurance:** Define and verify a policy that prevents unauthorized downgrade to an older firmware version. Version comparison alone should not be treated as proof of a secure monotonic anti-rollback mechanism.
+- **Metadata authenticity and resilience:** Consider authentication and protection of security-relevant metadata, and harden record rotation against power interruption.
+- **Active-slot corruption recovery:** The current selected-active-image SHA mismatch path enters BootSafe/fail-safe; automatic alternate-slot fallback is not implemented in that path.
+- **Communication and download:** Replace the button-based demonstration trigger and pre-staged image workflow with a suitable transport/download mechanism for a target deployment.
+- **Power-loss testing:** Perform separate hardware power-interruption tests at defined flash programming and metadata update stages before claiming power-loss resilience.
+- **Assurance documentation:** Complete threat modeling, prioritized mitigations, unit-test coverage review, IEC 62443-oriented cybersecurity mapping, and ISO 26262-oriented safety mapping.
 
-## Current Development Focus
+These future tasks should be evaluated against the intended product context and threat model. Standards mapping in this project is educational engineering documentation and does not establish certification or compliance.
 
-The current development phase is focused on completing the production-oriented A/B firmware update mechanism.
+## Hardware and Software Tools
 
-Planned implementation steps include:
+- **MCU:** STM32F407
+- **CPU architecture:** ARM Cortex-M4
+- **Language:** Embedded C
+- **IDE:** STM32CubeIDE
+- **Debug interface:** ST-LINK / SWD / GDB
+- **Runtime diagnostics:** ITM output and on-board LED indications
+- **Host-side tooling:** Python metadata/image preparation script
+- **Version control:** Git / GitHub
 
-1. Implement slot-aware firmware metadata
-2. Implement persistent update-state handling
-3. Determine the active and inactive firmware slots
-4. Validate firmware stored in the download/staging area
-5. Program the validated firmware into the inactive slot
-6. Verify the programmed destination image
-7. Implement BOOT_PENDING trial boot handling
-8. Implement watchdog-protected firmware confirmation
-9. Safely commit the new confirmed slot
-10. Implement automatic fallback to the previous confirmed firmware
-11. Test reset and power-loss conditions throughout the update flow
+## Key Project Artifacts
 
-## Planned Security Extension
+- **Bootloader firmware:** Metadata selection and validation, staged-image validation, slot programming, destination integrity verification, boot decision, confirmation recovery, and fail-safe handling.
+- **Application firmware:** Slot-linked application, update notification demonstration, and confirmation call.
+- **Staging firmware/image:** Test image prepared for validation and promotion into the inactive slot.
+- **Host metadata tool:** `Tools/prepare_slot_metadata.py`.
+- **Validation records:** Test cases and supporting evidence maintained separately.
 
-Digital signature verification will be added after the A/B firmware update architecture and update-state handling are completed.
+## Project Goal
 
-SHA-256 provides firmware integrity verification by detecting changes to the firmware image. Digital signatures will extend the design by providing firmware authenticity and allowing the bootloader to verify that an image was produced by a trusted signing source.
+This project demonstrates practical embedded firmware engineering across memory layout, linker configuration, SHA-256 integrity checks, flash programming, metadata journaling, bootloader/application handover, A/B update handling, watchdog-driven recovery, and evidence-based testing.
 
-The intended verification flow is:
-
-```text
-Downloaded Firmware
-        |
-        v
-Integrity Verification
-        |
-        v
-Digital Signature Verification
-        |
-        v
-Program Inactive Slot
-        |
-        v
-Post-program Verification
-        |
-        v
-Activate Slot
-```
-
-## Verification & Testing
-
-Validation is performed incrementally during implementation.
-
-Current verification areas include:
-
-* SHA-256 standard test vectors
-* Empty and single-block inputs
-* Padding-boundary test cases
-* Multi-block SHA-256 inputs
-* STM32 Flash image hashing
-* Firmware integrity verification
-* Firmware metadata validation
-* Firmware version comparison
-* Application memory boundary validation
-* Slot-specific firmware execution
-* Vector table configuration
-* Invalid/corrupted firmware handling
-
-Future validation will cover:
-
-* Active/inactive slot selection
-* Download/staging validation
-* Firmware promotion
-* Persistent update-state transitions
-* BOOT_PENDING handling
-* Watchdog-protected confirmation
-* Interrupted update recovery
-* Power-loss handling
-* Automatic fallback
-* Post-promotion verification
-* Digital signature verification
-
-Test evidence is maintained separately using validation test cases, debugger checkpoints, LED status indication, and screenshots.
-
-## Hardware & Software
-
-* **MCU:** STM32F407
-* **Architecture:** ARM Cortex-M4
-* **Language:** Embedded C
-* **IDE:** STM32CubeIDE
-* **Debugging:** ST-LINK / SWD / GDB
-* **Build / Image Handling:** STM32CubeIDE build and post-build processing
-* **Version Control:** Git / GitHub
-
-## Repository Structure
-
-```text
-STM32-Project-05-Secure-Boot/
-├── Bootloader/
-│   └── Secure_Boot/
-│       └── STM32F407 Secure Boot bootloader
-├── Firmware_Slot_A/
-│   └── Firmware linked for Slot A
-├── Firmware_Slot_B/
-│   └── Firmware linked for Slot B
-├── Docs/
-│   └── Project documentation and design notes
-├── Validation/
-│   └── Test cases, validation results, and evidence
-├── LICENSE
-└── README.md
-```
-
-## Memory Architecture
-
-| Region     |           Address | Purpose            |
-| ---------- | ----------------: | ------------------ |
-| Sector 0-1 | Bootloader region | Secure Boot        |
-| Sector 2   |      `0x08008000` | Slot A metadata    |
-| Sector 3   |      `0x0800C000` | Slot B metadata    |
-| Sector 4   |      `0x08010000` | Download / staging |
-| Sector 5   |      `0x08020000` | Firmware Slot A    |
-| Sector 6   |      `0x08040000` | Firmware Slot B    |
-
-## Future Enhancements
-
-* Production-grade persistent update-state handling
-* Power-loss-resilient metadata updates
-* Candidate validation and firmware promotion
-* Watchdog-protected trial boot
-* Automatic rollback and recovery
-* Digital signature verification
-* Authenticated firmware updates
-* Automated firmware image generation and validation
-* ISO 26262-oriented verification
-* Increased unit-test coverage
-* Tool-based coverage analysis
+The remaining work focuses on threat analysis, standards-oriented documentation, further unit-test review, and extending integrity protection to cryptographic firmware authenticity.
