@@ -4,9 +4,9 @@
 
 This project focuses on designing and implementing a Secure Boot and dual-image firmware update architecture for an STM32F407-based embedded system.
 
-The current implementation focuses on firmware integrity verification, application image validation, secure application handover, and candidate/active firmware management.
+The implementation focuses on firmware integrity verification using SHA-256, application image validation, controlled application handover, and candidate/active firmware management.
 
-Digital-signature-based firmware authenticity verification is planned as a future security extension.
+The project demonstrates firmware integrity and recovery mechanisms. Digital-signature-based firmware authenticity verification is outside the current implementation scope.
 
 ---
 
@@ -27,15 +27,16 @@ For firmware update scenarios, the system also needs to evaluate a new candidate
 The project objectives are to:
 
 * Start bootloader execution after MCU reset.
-* Identify and validate the installed firmware image.
-* Validate firmware metadata and application memory boundaries.
+* Identify and validate firmware using its metadata.
+* Validate firmware image size, memory boundaries, and reset-handler address.
 * Verify firmware integrity using SHA-256.
-* Manage separate active and candidate firmware images.
-* Independently verify candidate firmware before execution.
-* Execute an application only after successful validation.
-* Reject invalid or corrupted firmware safely.
-* Provide an active-image fallback when candidate validation fails.
-* Provide a foundation for future authenticated firmware updates.
+* Manage firmware staging, active and inactive slots, and metadata-driven update states.
+* Validate staged firmware and independently verify the programmed destination image.
+* Reject invalid candidate firmware before trial boot.
+* Manage candidate trial boot and explicit application confirmation.
+* Roll back to the previously confirmed firmware when a candidate fails to confirm, according to the implemented recovery policy.
+* Enter the configured BootSafe/fail-safe behavior when the selected active image fails integrity verification.
+* Demonstrate firmware update handling and recovery using the STM32F407 hardware platform.
 
 ---
 
@@ -61,8 +62,12 @@ Responsibilities include:
 
 ### Candidate Firmware
 
-The Candidate Firmware represents a new firmware image being evaluated by the bootloader.
+The candidate firmware represents a new image being evaluated by the bootloader.
 
-The candidate image is stored separately from the active firmware so that the existing active image remains available while the candidate is being validated.
+The incoming image is first stored in the download/staging region. After validating the staged image metadata, image size, version policy, and SHA-256 digest, the bootloader programs the inactive firmware slot.
 
-The bootloader independently calculates the can
+The bootloader then independently calculates the SHA-256 digest of the programmed destination image and compares it with the expected digest. If validation succeeds, the candidate is marked `BOOT_PENDING` and selected for trial boot.
+
+The candidate application must explicitly confirm successful startup. If the candidate fails to confirm and the MCU resets, the bootloader detects the unconfirmed state and returns to the previously confirmed firmware according to the implemented recovery policy.
+
+If candidate validation fails before activation, the invalid candidate is rejected and is not selected for trial boot.
