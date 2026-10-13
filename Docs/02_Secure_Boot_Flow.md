@@ -6,55 +6,88 @@ The Secure Boot process verifies the application firmware before allowing execut
 
 The Bootloader is the first software component executed after MCU reset. It validates the application metadata, verifies the firmware image integrity using SHA-256, and transfers control to the application only when the defined validation checks succeed.
 
+
 ## 2. Boot Flow
 
 ```text
-                 MCU RESET
-                     |
-                     v
-              +--------------+
-              |  Bootloader  |
-              +--------------+
-                     |
-                     v
-             Read Application
-                 Metadata
-                     |
-                     v
-            Validate Metadata
-                     |
-              +------+------+
-              |             |
-           INVALID        VALID
-              |             |
-              v             v
-          Fail-Safe    Validate Image
-                        Boundaries
-                            |
-                      +-----+-----+
-                      |           |
-                   INVALID       VALID
-                      |           |
-                      v           v
-                  Fail-Safe   Calculate
-                              SHA-256
-                                 |
-                          Compare Digest
-                                 |
-                      +----------+----------+
-                      |                     |
-                   MISMATCH                MATCH
-                      |                     |
-                      v                     v
-                  Fail-Safe        Prepare Application
-                                         Handover
-                                             |
-                                             v
-                                   Jump to Application
-                                             |
-                                             v
-                                        APPLICATION
+                         MCU RESET
+                             |
+                             v
+                      +--------------+
+                      |  Bootloader  |
+                      +--------------+
+                             |
+                             v
+                Read Valid Metadata Records
+                  for Firmware Slots/Update
+                             |
+                             v
+                  Determine Boot/Update State
+                             |
+                 +-----------+-----------------+
+                 |                             |
+          Update Candidate              Normal Boot /
+              Pending                  Trial-Boot State
+                 |                            |
+                 v                            v
+         Validate Staged Image         Select Image According
+          Metadata, Size,              to Metadata and State
+          Version and SHA-256                 |
+                 |                            |
+           +-----+-----+                      |
+           |           |                      |
+        INVALID       VALID                   |
+           |           |                      |
+           v           v                      |
+      Reject Update  Program Inactive         |
+                      Firmware Slot           |
+                           |                  | 
+                           v                  |
+                  Verify Destination          |
+                       SHA-256                |
+                         |                    |
+                 +-------+---------+          |
+                 |                 |          | 
+             MISMATCH            MATCH        | 
+                 |                 |          |
+                 v                 v          |
+         Reject Candidate        Append BOOT_PENDING
+         Do Not Trial Boot               |
+                                         v
+                                  Select Candidate
+                                   for Trial Boot
+                                         |
+                                         v
+                              Validate Selected Image
+                               Metadata, Boundaries,
+                               SHA-256 and Vector Data
+                                         |
+                                   +-----+-----+
+                                   |           |
+                                INVALID       VALID
+                                   |           |
+                                   v           v
+                           Failure Handling  Prepare
+                           / Reject Candidate Handover
+                                               |
+                                               v
+                                        Jump to Application
+
+                  Candidate remains BOOT_PENDING
+                   after an unconfirmed trial boot
+                               and reset
+                                  |
+                                  v
+                        Roll Back to Previously
+                           Confirmed Firmware
+
+      Selected active image SHA-256 mismatch:
+                  Enter BootSafe / Fail-Safe
+          (no automatic alternate-slot fallback)
 ```
+
+The diagram summarizes the main boot and update paths. The bootloader selects the appropriate image based on the committed metadata state, validates the image before execution, and uses the implemented recovery policy for an unconfirmed candidate or an integrity failure.
+
 
 ## 3. Detailed Steps
 
@@ -81,18 +114,6 @@ The metadata contains information used to validate the firmware image, including
 * Firmware version
 * Reference SHA-256 digest
 
-### Step 4 – Metadata Validation
-
-The Bootloader validates the metadata before processing the application image.
-
-Validation includes checking:
-
-* Metadata validity
-* Firmware image size
-* Application image boundaries
-* Address range against the configured application region
-
-Invalid metadata causes the Bootloader to enter the defined failure-handling path.
 
 ### Step 5 – Firmware Integrity Verification
 
@@ -115,19 +136,35 @@ Calculated Digest
                               SHA-256 Digest
 ```
 
-### Step 6 – Verification Decision
 
-If the calculated SHA-256 digest matches the stored reference digest, the application passes the firmware integrity check.
+## 6. Current Verification Coverage
 
-If the digest does not match, the application is rejected and the Bootloader enters the defined failure-handling path.
+Functional verification has been performed for the defined test scope. Supporting evidence includes ITM logs, debugger observations, firmware version and metadata-state output, and LED indications where applicable.
+
+The documented verification includes:
+
+- SHA-256 test vectors, including padding boundaries and single-block and multi-block inputs.
+- Metadata validation and journal operations, including sequence handling, CRC and commit-marker checks.
+- Application image-size, memory-boundary and reset-handler validation.
+- Firmware version checks and staged-image validation.
+- SHA-256 verification of firmware stored in STM32 Flash.
+- Detection of matching and mismatched firmware digests.
+- Destination flash programming and post-program SHA-256 verification.
+- Consecutive A/B firmware update cycling (`A → B → A → B`).
+- Application confirmation and persistence of the confirmed state.
+- Retry handling following the tested interrupted destination-programming scenario.
+- Candidate trial boot, failure to confirm, watchdog reset and rollback to the previously confirmed image.
+- Active-image SHA-256 mismatch and BootSafe/fail-safe entry.
+- Recovery followed by a subsequent valid firmware update.
+- Successful application handover following validation.
+
+The verification claims are limited to the executed test cases and their recorded evidence. The debugger-induced reset scenario does not establish resilience to an actual power cut during flash programming or metadata writes.
 
 ### Step 7 – Application Handover
 
 After successful validation, the Bootloader prepares the processor for application execution.
 
-The application vector table is configured and the application's initial stack pointer and reset handler address are obtained from the application image.
-
-The Bootloader validates the application reset handler address before transferring control.
+The Bootloader configures the application vector table, obtains the application's initial stack pointer and reset-handler address, and validates the applicable address constraints before transferring control to the application.
 
 ### Step 8 – Application Execution
 
@@ -137,22 +174,17 @@ The validated application firmware then starts execution.
 
 ## 4. Failure Handling
 
-When metadata validation, application boundary validation, or SHA-256 integrity verification fails, the Bootloader must not execute the invalid application.
+The Bootloader prevents execution of firmware that fails the applicable validation and integrity checks.
 
-```text
-Firmware Validation
-        |
-        v
-      FAILED
-        |
-        v
-Do NOT execute application
-        |
-        v
-Bootloader Fail-Safe Path
-```
+The current implementation handles the following scenarios:
 
-The current implementation uses a defined Bootloader failure path for invalid firmware conditions.
+- **Invalid staged firmware:** Reject the candidate update when its metadata, image boundaries, version policy, or integrity check fails.
+- **Destination integrity mismatch:** Do not select the programmed candidate for trial boot if its SHA-256 verification fails.
+- **Candidate fails to confirm:** If the candidate remains unconfirmed after a reset or the tested watchdog-reset scenario, return to the previously confirmed firmware according to the implemented recovery policy.
+- **Selected active-image integrity failure:** If the selected active image fails SHA-256 verification, enter the configured BootSafe/fail-safe behavior. The current implementation does not automatically fall back to the alternate slot in this path.
+- **Invalid boot metadata or application handover information:** Do not transfer control to an image that fails the applicable metadata, boundary, or reset-handler validation.
+
+These behaviors are supported by the documented functional and recovery test cases. The exact recovery action depends on the failure scenario and the state of the available firmware images.
 
 ## 5. Security Principle
 
@@ -178,16 +210,17 @@ The Secure Boot implementation has been validated for:
 * Application reset-handler validation
 * Successful application handover
 
-## 7. Future Extensions
+## 7. Out-of-Scope Enhancements
 
-The Secure Boot flow can be extended with:
+The current project release is complete for its intended portfolio demonstration scope. The following capabilities are documented as possible future enhancements, not pending work for this release:
 
-* Digital Signature Authentication
-* Authenticated firmware updates
-* Anti-rollback protection
-* Enhanced recovery mechanisms
-* Persistent firmware update state
-* Production-oriented security hardening
-* Security-related testing
-* Safety requirements and verification activities
-* ISO 26262-oriented verification practices
+- **Digital-signature authentication:** Verify firmware authenticity using digital signatures and trusted public-key management.
+- **Authenticated metadata:** Protect security-relevant firmware metadata and the expected integrity digest against unauthorized modification.
+- **Cryptographically enforced anti-rollback protection:** Strengthen the existing firmware version checks with protected version state and enforcement against unauthorized downgrade attempts.
+- **Production firmware download:** Replace the demonstration trigger and pre-staged firmware workflow with a suitable communication and download mechanism.
+- **Enhanced active-slot recovery:** Evaluate alternate-slot recovery when the selected active firmware fails integrity verification.
+- **Power-loss resilience:** Evaluate and validate behavior under actual power interruption during flash programming and metadata updates.
+- **Production security hardening:** Evaluate additional protections according to the intended deployment environment and threat model.
+
+The project documents firmware integrity and recovery mechanisms but does not claim firmware authenticity, cryptographically enforced anti-rollback protection, production deployment readiness, or formal standards compliance.
+
