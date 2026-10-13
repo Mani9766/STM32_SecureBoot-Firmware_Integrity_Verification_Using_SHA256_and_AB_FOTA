@@ -4,6 +4,7 @@ A practical STM32F407 project implementing a bootloader, SHA-256 firmware integr
 
 The project demonstrates how a bootloader can validate staged firmware, program an inactive slot, verify the programmed image, trial-boot a candidate, and confirm or roll back based on the candidate's outcome.
 
+
 ## Project Status
 
 ### Implemented and functionally tested
@@ -20,14 +21,22 @@ The project demonstrates how a bootloader can validate staged firmware, program 
 - A button-based update notification used as a demonstration substitute for an external communication trigger.
 - ITM/debugger and LED evidence for the main boot, update, integrity, confirmation, and recovery paths.
 
-### Remaining work and limitations
+### Completed analysis and documentation
 
-- Threat modeling and security-hardening review.
-- Documentation aligning relevant IEC 62443 cybersecurity practices and ISO 26262 safety concepts with the project. This is not formal certification or a full compliance assessment.
-- Final unit-test coverage review and consolidated project documentation.
-- Digital-signature verification and trusted-key management.
-- A production communication/download mechanism; the current button trigger is a demonstration substitute.
-- Additional resilience work and testing for actual power interruption during flash operations and metadata writes.
+- Threat modeling and security analysis for the project scope.
+- Unit testing for the defined test scope, with recorded results.
+- Project-level IEC 62443 alignment assessment covering selected cybersecurity concepts, implemented mechanisms, verification evidence, and identified gaps.
+- Documentation of the firmware architecture, update flow, validation behavior, recovery mechanisms, and known limitations.
+
+### Known limitations and out-of-scope enhancements
+
+- Digital-signature verification and trusted-key management are not implemented.
+- A production communication and firmware-download mechanism is not implemented; the current button trigger and pre-staged firmware demonstrate the update workflow.
+- Cryptographically protected anti-rollback enforcement is not implemented.
+- Authenticated metadata and resilience to actual power interruption during flash operations and metadata writes are not established.
+- When the selected active image fails SHA-256 verification, the bootloader enters BootSafe/fail-safe behavior rather than automatically trying the alternate slot.
+
+These limitations are documented boundaries of the current project. They do not represent pending implementation or testing tasks for this release.
 
 ## Architecture Overview
 
@@ -251,8 +260,15 @@ These future tasks should be evaluated against the intended product context and 
 - **Host metadata tool:** `Tools/prepare_slot_metadata.py`.
 - **Validation records:** Test cases and supporting evidence maintained separately.
 
+
 ## Project Goal
 
 This project demonstrates practical embedded firmware engineering across memory layout, linker configuration, SHA-256 integrity checks, flash programming, metadata journaling, bootloader/application handover, A/B update handling, watchdog-driven recovery, and evidence-based testing.
+
+The current project scope includes the implemented firmware integrity and recovery mechanisms, completed threat analysis, unit-test evidence, and a preliminary alignment assessment against selected IEC 62443 cybersecurity concepts.
+
+Firmware authenticity, cryptographically enforced anti-rollback protection, production communication/download, authenticated metadata, and resilience to actual power interruption remain outside the current implementation scope.
+
+The project is presented as a completed engineering portfolio demonstration, not as a formally certified or standards-compliant product.
 
 The remaining work focuses on threat analysis, standards-oriented documentation, further unit-test review, and extending integrity protection to cryptographic firmware authenticity.
