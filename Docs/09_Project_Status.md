@@ -2,127 +2,61 @@
 
 ## 1. Current Status
 
-**Status: Core Secure Boot and FOTA Validation Completed**
+**Status: Core Implementation, Verification, and Security Documentation Completed**
 
-The STM32F407 Secure Boot project has completed its core implementation and validation phase.
+The STM32F407 Secure Boot project has completed its core implementation and initial verification phase. The project now includes firmware integrity verification, candidate/active image management, FOTA-oriented validation, negative testing, threat modeling, unit testing, and security requirements documentation.
 
-The current implementation includes:
+The implemented bootloader validates firmware metadata, checks application memory boundaries, verifies firmware integrity using SHA-256, evaluates candidate firmware versions, and applies candidate rejection and active-image fallback logic when validation fails.
 
-* Bootloader/Application memory separation
-* Application handover
-* Firmware metadata validation
-* Application memory-boundary validation
-* SHA-256 implementation and verification
-* Active and candidate image management
-* Candidate firmware version comparison
-* Candidate SHA-256 verification
-* Active SHA-256 verification
-* Candidate rejection and active-image fallback
-* Invalid firmware handling
-* Fail-safe handling
+The verification activities include SHA-256 standard test vectors, boundary and multi-block testing, Flash-image integrity checks, GDB-based fault injection, FOTA validation test cases, unit testing, and threat analysis.
 
-The project is currently in the **finalization phase**, including demonstration recording, documentation completion, GitHub cleanup, and portfolio preparation.
+Security requirements, test strategy, architecture documentation, failure-handling documentation, and standards-alignment activities have also been addressed.
+
+The project is currently in the **finalization and portfolio preparation phase**, focusing on demonstration recording, final documentation review, GitHub cleanup, and preparation of project evidence for professional presentation.
+
+Digital signature authentication and advanced FOTA recovery capabilities remain planned enhancements and are not claimed as completed functionality.
 
 ---
+## 2. Completed Status
+### Security Analysis and Requirements
 
-## 2. Completed
+- [x] Security requirements documented
+- [x] Threat model developed
+- [x] Threat analysis completed
+- [x] Identified security threats and failure scenarios documented
+- [x] Security limitations and future enhancements identified
 
-* [x] Project repository created
-* [x] Project objective defined
-* [x] High-level Secure Boot architecture defined
-* [x] Secure Boot flow implemented
-* [x] Bootloader/Application architecture implemented
-* [x] Flash memory architecture implemented
-* [x] Bootloader linker configuration
-* [x] Application linker configuration
-* [x] Bootloader-to-Application handover
-* [x] Application vector-table configuration
-* [x] Application stack-pointer validation
-* [x] Application reset-handler validation
-* [x] Firmware metadata structure implemented
-* [x] Firmware metadata validation
-* [x] Firmware magic-number validation
-* [x] Firmware image-size validation
-* [x] Application memory-boundary validation
-* [x] Firmware version handling
-* [x] SHA-256 implementation
-* [x] SHA-256 standard test-vector validation
-* [x] SHA-256 boundary and multi-block testing
-* [x] SHA-256 verification of firmware stored in STM32 Flash
-* [x] Active firmware integrity verification
-* [x] Candidate firmware integrity verification
-* [x] Candidate/active image separation
-* [x] Candidate version comparison
-* [x] Candidate rejection on SHA-256 mismatch
-* [x] Active-image fallback
-* [x] Fail-safe handling
-* [x] GDB-based validation and fault-injection testing
-* [x] FOTA validation test cases
-* [x] Validation evidence captured
+### Verification and Testing
+
+- [x] Unit testing completed for the current test scope
+- [x] Unit test results documented
+- [x] SHA-256 standard test vectors verified
+- [x] SHA-256 boundary and multi-block cases tested
+- [x] Positive and negative firmware-validation scenarios tested
+- [x] Candidate rejection and active-image fallback tested
+- [x] GDB-based fault-injection tests performed
+- [x] FOTA validation test cases executed
+- [x] Test results and supporting evidence captured
+
+### Standards and Engineering Documentation
+
+- [x] IEC 62443 alignment reviewed and documented
+- [x] ISO 26262 concepts and relevance reviewed
+- [x] Test strategy documented
+- [x] Security requirements documented
+- [x] Architecture and memory layout documented
+- [x] Failure-handling behavior documented
+- [x] Project status and future development roadmap updated
+
+### Project Presentation
+
+- [ ] Final demonstration video recorded
+- [ ] GitHub repository and documentation reviewed
+- [ ] Portfolio presentation finalized
+- [ ] Project shared through relevant professional platforms
 ---
 
-## 4. Next Security Enhancement – Digital Signature Authentication
-
-The next major development phase is **Digital Signature Authentication (DSA)**.
-
-Planned activities include:
-
-* [ ] Select signature algorithm
-* [ ] Generate development signing key pair
-* [ ] Implement host-side firmware signing
-* [ ] Define signed firmware format
-* [ ] Integrate trusted public-key information
-* [ ] Implement signature verification in Bootloader
-* [ ] Test valid signatures
-* [ ] Test invalid signatures
-* [ ] Test modified signed firmware
-* [ ] Test incorrect/untrusted public key
-* [ ] Measure signature-verification performance and memory usage
-
----
-
-## 5. Advanced FOTA Enhancements
-
-After DSA, the FOTA implementation can be extended toward a more production-oriented update architecture.
-
-### Candidate-to-Active Activation
-
-* [ ] Program validated candidate firmware into the active image region
-* [ ] Update active firmware metadata
-* [ ] Verify the newly activated image
-* [ ] Define safe activation sequencing
-
-### Persistent Update State
-
-* [ ] Allocate dedicated non-volatile storage for update state
-* [ ] Store update state across reset/power cycles
-* [ ] Define update-state transitions
-
-### Pending / Confirmed Handling
-
-* [ ] Mark newly activated firmware as pending
-* [ ] Allow the application to confirm successful startup
-* [ ] Persist confirmation status
-* [ ] Handle missing confirmation
-
-### Rollback and Recovery
-
-* [ ] Preserve previous known-good firmware
-* [ ] Implement automatic rollback
-* [ ] Handle failed activation
-* [ ] Handle unexpected reset or power loss during update
-* [ ] Add recovery mechanisms
-
-### Additional Security Improvements
-
-* [ ] Anti-rollback protection
-* [ ] Key-management considerations
-* [ ] Debug-interface security
-* [ ] Additional security hardening
-
----
-
-## 6. Verification and Safety Extensions
+## 3. Verification and Safety Extensions
 
 Future verification activities include:
 
@@ -139,7 +73,7 @@ Future verification activities include:
 
 ---
 
-## 7. Documentation Status
+## 4. Documentation Status
 
 | Document                   | Status   |
 | -------------------------- | -------- |
@@ -155,60 +89,7 @@ Future verification activities include:
 
 ---
 
-## 8. Current Architecture
-
-The current implemented architecture is:
-
-```text
-                    MCU RESET
-                        |
-                        v
-                  +-----------+
-                  | Bootloader|
-                  +-----------+
-                        |
-                        v
-              Read Active Metadata
-                        |
-                        v
-              Read Candidate Metadata
-                        |
-               +--------+--------+
-               |                 |
-        Candidate Invalid /   Candidate Valid
-        Not Newer             and Newer
-               |                 |
-               |                 v
-               |          Calculate Candidate
-               |             SHA-256
-               |                 |
-               |            +----+----+
-               |            |         |
-               |          MATCH    MISMATCH
-               |            |         |
-               |            v         v
-               |       Boot Candidate Reject
-               |                        |
-               +------------------------+
-                        |
-                        v
-                 Verify Active Image
-                        |
-                  +-----+-----+
-                  |           |
-                MATCH      MISMATCH
-                  |           |
-                  v           v
-             Boot Active   Fail-Safe
-```
-
-The current candidate firmware is validated and executed directly from its candidate Flash location.
-
-Candidate-to-active programming, persistent update state, pending/confirmed handling, rollback, and advanced recovery are intentionally deferred to the post-DSA enhancement phase.
-
----
-
-## 9. Project Milestone
+## 5. Project Milestone
 
 ### Milestone 1 – Core Secure Boot
 
@@ -228,14 +109,8 @@ SHA-256 implementation, standard test vectors, Flash-image hashing, active-image
 
 Candidate metadata handling, version comparison, candidate SHA-256 verification, candidate rejection, active-image fallback, and fail-safe handling.
 
-### Milestone 4 – Digital Signature Authentication
+### Milestone 4 – Production-Oriented FOTA Enhancement
 
-**Planned**
-
-Firmware authenticity verification using digital signatures.
-
-### Milestone 5 – Production-Oriented FOTA Enhancement
-
-**Planned**
+**Completed and Verified**
 
 Candidate-to-active activation, persistent update state, pending/confirmed handling, rollback, recovery, anti-rollback, and additional security hardening.
