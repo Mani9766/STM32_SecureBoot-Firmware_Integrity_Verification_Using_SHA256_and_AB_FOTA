@@ -2,505 +2,233 @@
 
 ## 1. Purpose
 
-This document defines the verification and testing strategy for the STM32F407 Secure Boot and FOTA-oriented firmware validation implementation.
+This document defines the verification strategy and summarizes the test coverage for the STM32F407 Secure Boot and A/B FOTA implementation.
 
-The objective is to demonstrate that the Bootloader:
+The objective is to verify that the implemented Bootloader and firmware-update flow:
 
-* Validates firmware metadata.
-* Validates application memory boundaries.
-* Verifies firmware integrity using SHA-256.
-* Rejects invalid or corrupted firmware.
-* Correctly handles candidate and active firmware images.
-* Transfers control only to a validated application.
-* Enters the defined fallback or fail-safe path when validation fails.
+- Validates firmware metadata and metadata records.
+- Checks image sizes and permitted Flash boundaries.
+- Verifies firmware integrity using SHA-256.
+- Rejects invalid or corrupted candidate images.
+- Verifies the programmed destination image before trial boot.
+- Applies the configured firmware-version policy.
+- Selects firmware according to metadata state and the boot policy.
+- Transfers control only after the required image and vector information checks pass.
+- Confirms successful candidate startup and recovers to previously confirmed firmware when a candidate fails to confirm.
+- Enters the configured BootSafe/fail-safe path when the selected active image fails integrity verification.
+- Handles documented Flash-operation and metadata-commit failures without reporting a failed update as successful.
 
-Digital Signature Authentication and persistent rollback mechanisms are planned for future enhancement and will be tested separately.
+This strategy describes the implemented project scope and its recorded verification evidence. Detailed test procedures, actual results, status, evidence filenames, and remarks are maintained in the individual test records.
 
 ---
 
 ## 2. Verification Approach
 
-Verification is performed incrementally using multiple test levels and techniques appropriate to the implemented functionality.
+Verification was performed incrementally using test techniques appropriate to the implemented firmware functionality.
 
-Current verification includes:
+The documented verification approach includes:
 
-* SHA-256 algorithm testing
-* Functional testing
-* Boot-flow integration testing
-* Positive testing
-* Negative testing
-* Boundary testing
-* Firmware corruption testing
-* Debugger-based fault injection
-* Candidate/active image validation
-* Application handover testing
-* Regression testing
+- SHA-256 algorithm and test-vector testing.
+- Firmware metadata and metadata-journal testing.
+- Linker configuration and image-boundary checks.
+- Positive and negative functional testing.
+- Image-size and memory-boundary testing.
+- Firmware corruption and digest-mismatch testing.
+- Boot-flow and application-handover testing.
+- Candidate and active image validation.
+- Firmware-version eligibility checks.
+- A/B update cycling and slot reuse.
+- Candidate trial-boot and confirmation testing.
+- Rollback after candidate confirmation failure or watchdog reset.
+- Controlled debugger-based fault injection.
+- Flash-operation and metadata-commit failure handling.
+- Interrupted-update and recovery scenarios as recorded in the test cases.
 
-The current project validation is performed primarily on the STM32F407 target using STM32CubeIDE, ST-LINK/SWD, GDB, LED status indication, and screenshots as test evidence.
-
----
-
-## 3. Bootloader Tests
-
-### TEST-BOOT-001 – Bootloader Startup
-
-**Objective:**
-Verify that the Bootloader executes after MCU reset.
-
-**Expected Result:**
-Bootloader starts successfully and enters the firmware validation flow.
-
-**Status:** Verified
+Testing was performed primarily on the STM32F407 target using STM32CubeIDE, ST-LINK/SWD, GDB, ITM/debug output, LED status indications, and screenshots as evidence.
 
 ---
 
-### TEST-BOOT-002 – Valid Application
+## 3. Test Suites and Traceability
 
-**Objective:**
-Verify that a valid application image passes the required validation checks and is executed.
+Detailed cases are maintained in separate test sheets. The following suites provide the primary traceability for the project.
 
-**Expected Result:**
-Bootloader validates the firmware and transfers control to the application.
+| Test suite / record | Test ID range | Main verification areas |
+|---|---|---|
+| `SHA256_Testing` | `SHA-001`–`SHA-005` | Standard SHA-256 vectors, empty input, padding boundaries, and multi-block input. |
+| `Memory_Linked_Config_Test` | `MEM-001`–`MEM-014` | Linker/image-boundary information, image-size generation, Flash metadata operations, integrity checks, invalid metadata/size handling, and staging/destination programming boundaries. |
+| `Dual_Image_FOTA_Test` | `DIF-001`–`DIF-009` | Slot address configuration, candidate image setup, metadata, normal active-image verification, and metadata commit-marker handling. |
+| `FOTA Boot Flow Validation` | `FOTA-VAL-001`–`FOTA-VAL-013` | Active/candidate metadata decisions, version eligibility, SHA-256 validation, fallback/fail-safe decisions, and controlled Flash-operation failure handling. |
+| `FOTA A/B Update and Recovery` | `FOTA-AB-001`–`FOTA-AB-016` | A/B updates, repeated cycling, interrupted-update scenarios, confirmation persistence, candidate failure, watchdog recovery, and active-image integrity failure. |
 
-**Status:** Verified
+The test sheets remain the authoritative records for individual test status and evidence. A test status should reflect the recorded actual result. If an actual result says that a check is pending or a configuration correction is required, its status and remarks should be reconciled before it is reported as passed.
 
----
-
-### TEST-BOOT-003 – Invalid Active Firmware
-
-**Objective:**
-Verify that the Bootloader does not execute an active firmware image whose integrity verification fails.
-
-**Expected Result:**
-Active firmware is rejected and the Bootloader enters the defined fail-safe path.
-
-**Status:** Verified
+Some `MEM` records document earlier linker/image-boundary development stages. The final A/B memory map and slot-specific execution behavior are represented by the relevant slot-layout and FOTA test records. The individual test records should be read with their stated configuration and scope in mind.
 
 ---
 
-## 4. Metadata Validation Tests
+## 4. SHA-256 Verification
 
-### TEST-META-001 – Valid Metadata
+The SHA-256 unit-test suite verifies the implementation against reference digests.
 
-**Objective:**
-Verify that valid firmware metadata is accepted.
+The documented cases include:
 
-**Expected Result:**
-Bootloader continues with firmware validation.
+- Empty input.
+- The standard `"abc"` test vector.
+- A 55-byte message near the padding boundary.
+- A 56-byte message that requires an additional padded block.
+- Multi-block input.
 
-**Status:** Verified
+Integration tests also verify SHA-256 calculations over firmware stored in STM32 Flash, comparison against the digest in metadata, detection of a digest mismatch, and rejection of the affected image.
 
----
+**Recorded unit-test suite:** `SHA-001`–`SHA-005`.
 
-### TEST-META-002 – Invalid Magic Number
-
-**Objective:**
-Verify that firmware metadata with an invalid magic value is rejected.
-
-**Expected Result:**
-Corresponding firmware image is rejected.
-
-**Status:** Verified
+Active and candidate firmware integrity behavior is covered by `MEM`, `FOTA-VAL`, and `FOTA-AB` records as applicable.
 
 ---
 
-### TEST-META-003 – Invalid Firmware Size
+## 5. Metadata, Memory Boundaries, and Application Handover
 
-**Objective:**
-Verify that an invalid firmware image size is rejected.
+The verification suite covers the metadata and address checks used by the Bootloader before application execution or firmware programming.
 
-**Expected Result:**
-Bootloader does not process or execute the invalid image.
+Coverage includes:
 
-**Status:** Verified
+- Metadata read success and failure.
+- Metadata magic and content validation.
+- Metadata record sequence, CRC, and commit-marker handling where covered by the test record.
+- Image-size validation against configured regions.
+- Staging and destination programming capacity checks.
+- Linker-generated application image boundaries and image-size information.
+- Application vector table and VTOR configuration.
+- Initial stack pointer validation.
+- Reset-handler address validation.
+- Successful handover to a validated executable image.
 
----
-
-### TEST-META-004 – Metadata Read Failure
-
-**Objective:**
-Verify the failure path when firmware metadata cannot be read successfully.
-
-**Expected Result:**
-Invalid metadata is not used for firmware execution.
-
-**Status:** Verified
+When a validation check fails, the associated image or operation is rejected according to the implemented decision path. The exact failure response differs for candidate metadata, active metadata, candidate integrity failure, and selected active-image integrity failure.
 
 ---
 
-## 5. SHA-256 Integrity Tests
+## 6. Candidate and Active Firmware Validation
 
-### TEST-INT-001 – Standard SHA-256 Test Vectors
+The FOTA boot-flow tests cover both candidate and active firmware paths.
 
-**Objective:**
-Verify the SHA-256 implementation against standard test vectors.
+### Candidate path
 
-**Test coverage includes:**
+- Read and validate candidate metadata.
+- Reject invalid candidate metadata.
+- Reject a candidate that does not satisfy the configured version policy.
+- Verify the staged candidate using SHA-256.
+- Program the candidate into the selected inactive executable slot.
+- Verify the SHA-256 digest of the programmed destination image.
+- Prevent a candidate that fails applicable validation from proceeding to trial boot.
 
-* Empty input
-* `"abc"`
-* 55-byte input
-* 56-byte input
-* Multi-block input
+### Active-image path
 
-**Expected Result:**
-Calculated digests match the expected SHA-256 values.
+- Read and validate active metadata.
+- Verify the selected active image using SHA-256.
+- Continue boot when the active image passes the required checks.
+- Enter `Bootloader_FailSafe()` / BootSafe behavior when selected active-image integrity verification fails.
 
-**Status:** Verified
+A candidate SHA-256 mismatch follows the tested candidate-rejection path and continues to active-image verification. A selected active-image SHA-256 mismatch follows the configured fail-safe path; automatic alternate-slot fallback is not implemented in that path.
 
----
-
-### TEST-INT-002 – Active Firmware SHA-256 Verification
-
-**Objective:**
-Verify the SHA-256 digest of firmware stored in STM32 Flash.
-
-**Expected Result:**
-Calculated active-image digest matches the digest stored in active metadata.
-
-**Status:** Verified
+**Recorded test suite:** `FOTA-VAL-001`–`FOTA-VAL-013`.
 
 ---
 
-### TEST-INT-003 – Candidate Firmware SHA-256 Verification
+## 7. A/B Update, Confirmation, and Recovery
 
-**Objective:**
-Verify the SHA-256 digest of a valid candidate firmware image stored in STM32 Flash.
+The A/B update tests verify the implemented firmware lifecycle across the staging area and executable Slot A / Slot B locations.
 
-**Expected Result:**
-Calculated candidate-image digest matches the digest stored in candidate metadata.
+Coverage includes:
 
-**Status:** Verified
+- Booting a known-good confirmed baseline image.
+- Updating from Slot A to Slot B.
+- Updating from Slot B to Slot A.
+- Reusing a previously used slot for a later update.
+- Completing the `A → B → A → B` update cycle.
+- Verifying successful candidate programming and destination integrity.
+- Recording `BOOT_PENDING` and handling candidate trial boot.
+- Confirming the candidate and retaining the confirmed state across resets.
+- Recovering when a candidate does not confirm.
+- Recovering after the tested candidate watchdog-reset scenario.
+- Handling repeated candidate watchdog failures according to the configured recovery behavior.
+- Reusing a previously failed candidate slot for a subsequent valid update.
+- Processing the documented interrupted-programming, interrupted-activation, and metadata/commit interruption scenarios.
+- Revalidating staged firmware and retrying destination programming in the documented interrupted-update scenario.
+- Entering BootSafe/fail-safe behavior when the selected active image fails SHA-256 verification.
 
----
+**Recorded test suite:** `FOTA-AB-001`–`FOTA-AB-016`.
 
-### TEST-INT-004 – Firmware Modification / SHA-256 Mismatch
-
-**Objective:**
-Modify the firmware image and verify that the Bootloader detects the change.
-
-**Expected Result:**
-Calculated digest does not match the stored digest and the affected firmware image is rejected.
-
-**Status:** Verified
-
----
-
-## 6. Memory Boundary Tests
-
-### TEST-MEM-001 – Valid Application Region
-
-**Objective:**
-Verify that an application image within the configured memory region is accepted.
-
-**Expected Result:**
-Application passes memory validation.
-
-**Status:** Verified
+The test records describe the precise preconditions, procedures, and outcomes for each scenario. The strategy does not broaden an individual test result beyond what its procedure and evidence demonstrate.
 
 ---
 
-### TEST-MEM-002 – Invalid Application Size
+## 8. Negative Testing and Fault Injection
 
-**Objective:**
-Verify that an image size outside the permitted range is rejected.
+Negative tests verify that invalid metadata, image sizes, firmware versions, firmware digests, and application vector information are not accepted by the relevant validation paths.
 
-**Expected Result:**
-Bootloader rejects the image.
+Debugger-based fault injection is used for selected branches by modifying values or return statuses in GDB and observing the Bootloader decision. This includes inspecting metadata fields, image addresses, calculated values, validation results, and application-handover state.
 
-**Status:** Verified
+Controlled Flash-operation failure handling is covered by the corresponding FOTA validation record. These tests demonstrate the specific injected failure conditions; they do not establish coverage of every possible hardware failure.
 
 ---
 
-### TEST-MEM-003 – Invalid Reset Handler Address
+## 9. Test Evidence and Reporting
 
-**Objective:**
-Verify that an application reset-handler address outside the permitted application region is rejected.
+Evidence is maintained in the individual test records and may include:
 
-**Expected Result:**
-Bootloader does not perform the application handover.
+- Test procedure and preconditions.
+- Expected and actual results.
+- Test status.
+- GDB checkpoints and variable inspection.
+- Flash-memory and metadata inspection.
+- ITM/debug output.
+- LED status indications.
+- Screenshots.
+- Build, linker-map, and firmware execution results.
 
-**Status:** Verified
+The test records provide traceability between the feature or requirement, objective, procedure, expected result, actual result, status, evidence filename, and remarks.
 
----
-
-## 7. Candidate / Active FOTA Tests
-
-The current FOTA validation verifies candidate and active firmware independently without programming the candidate into the active image region.
-
-### TEST-FOTA-001 – Active Metadata Read
-
-Verify successful reading of active firmware metadata.
-
-**Status:** Verified
-
-### TEST-FOTA-002 – Active Metadata Read Failure
-
-Verify handling when active metadata reading fails.
-
-**Status:** Verified
-
-### TEST-FOTA-003 – Active Metadata Validation Failure
-
-Verify rejection of invalid active metadata.
-
-**Status:** Verified
-
-### TEST-FOTA-004 – Valid Active Metadata
-
-Verify that valid active metadata allows the validation flow to continue.
-
-**Status:** Verified
-
-### TEST-FOTA-005 – Candidate Metadata Read Failure
-
-Verify that a candidate metadata read failure does not prevent active-image fallback.
-
-**Status:** Verified
-
-### TEST-FOTA-006 – Valid Candidate Metadata
-
-Verify acceptance of valid candidate metadata.
-
-**Status:** Verified
-
-### TEST-FOTA-007 – Invalid Candidate Metadata
-
-Verify rejection of invalid candidate metadata.
-
-**Status:** Verified
-
-### TEST-FOTA-008 – Candidate Version Check
-
-Verify that a candidate that is not newer than the active firmware is not processed as a new candidate.
-
-**Status:** Verified
-
-### TEST-FOTA-009 – Candidate SHA-256 Match
-
-Verify that a newer candidate with a matching SHA-256 digest is accepted and booted.
-
-**Status:** Verified
-
-### TEST-FOTA-010 – Candidate SHA-256 Mismatch
-
-Verify that a candidate with a SHA-256 mismatch is rejected.
-
-**Status:** Verified
-
-### TEST-FOTA-011 – Active SHA-256 Match
-
-Verify that the active image passes integrity verification and is booted.
-
-**Status:** Verified
-
-### TEST-FOTA-012 – Active SHA-256 Mismatch
-
-Verify that the active image is rejected when its SHA-256 verification fails and the Bootloader enters the fail-safe path.
-
-**Status:** Verified
+A test should be reported as passed only when its actual result supports the expected result. Where a test record contains contradictory information—for example, a `PASS` status alongside a note that a correction or final verification is pending—the record should be reconciled rather than treated as unambiguously passed.
 
 ---
 
-## 8. Application Handover Tests
+## 10. Regression Testing
 
-### TEST-JMP-001 – Application Vector Table
+If the implementation is changed in a future revision, relevant previously verified cases should be repeated. Areas that can affect existing behavior include:
 
-**Objective:**
-Verify that the application vector table is correctly configured before application handover.
+- Bootloader decision logic.
+- Application or candidate firmware code.
+- Metadata structure or journal handling.
+- SHA-256 implementation or image range calculation.
+- Linker configuration and vector-table locations.
+- Flash memory layout.
+- Candidate version policy.
+- Flash erase/program and metadata commit handling.
+- Trial-boot, confirmation, and recovery logic.
 
-**Expected Result:**
-Application starts using its own vector table.
-
-**Status:** Verified
-
----
-
-### TEST-JMP-002 – Initial Stack Pointer
-
-**Objective:**
-Verify that the application's initial stack pointer is within the configured SRAM region.
-
-**Expected Result:**
-Valid stack pointer is accepted.
-
-**Status:** Verified
+This section describes the regression approach for future changes; it does not assert that additional testing is currently planned for this project release.
 
 ---
 
-### TEST-JMP-003 – Reset Handler
+## 11. Verification Scope and Boundaries
 
-**Objective:**
-Verify that the Bootloader transfers execution only when the application reset-handler address is valid.
+The completed test records demonstrate the specified functional, integrity, memory-boundary, boot-flow, A/B update, and recovery scenarios within their recorded scope.
 
-**Expected Result:**
-Valid reset-handler address allows application handover; invalid address prevents the jump.
+The following boundaries apply when interpreting the results:
 
-**Status:** Verified
+- Results apply to the documented test procedures and preconditions, not every possible input or execution sequence.
+- Debugger-induced reset testing does not, by itself, establish resilience to physical power removal at every point during Flash programming or metadata writes.
+- The project does not claim a separate full end-to-end regression run across every possible scenario combination.
+- A successful test of one failure path does not imply equivalent behavior for a different failure path. In particular, candidate rejection/rollback and selected active-image BootSafe behavior are distinct.
 
----
-
-## 9. Negative Testing
-
-Negative testing is used to verify that invalid firmware conditions are rejected safely.
-
-Current negative test coverage includes:
-
-* Invalid metadata
-* Invalid magic number
-* Invalid firmware size
-* Invalid application boundary
-* Invalid reset-handler address
-* Modified firmware
-* Candidate SHA-256 mismatch
-* Active SHA-256 mismatch
-* Candidate version rejection
-* Metadata read failure
-
-For every mandatory validation failure:
-
-> **The affected firmware image shall not be executed.**
-
-The candidate/active architecture additionally verifies that a rejected candidate does not prevent the Bootloader from attempting the active-image fallback.
+These boundaries describe the scope of the evidence and do not invalidate the test cases that passed under their recorded conditions.
 
 ---
 
-## 10. Debugger-Based Fault Injection
+## 12. Implementation and Verification Status
 
-GDB is used during validation to force specific conditions and verify the corresponding decision paths.
+**Status: Core functionality and defined test scenarios verified.**
 
-Examples include:
+The project includes recorded tests for SHA-256 calculation, metadata handling, image-size and memory-boundary validation, firmware integrity checks, application handover, candidate eligibility, A/B update cycling, candidate confirmation, rollback after the tested candidate failure scenarios, and fail-safe handling for selected active-image integrity failure.
 
-* Forcing validation conditions
-* Inspecting metadata values
-* Inspecting firmware addresses
-* Verifying calculated values
-* Entering invalid memory-validation conditions
-* Confirming failure branches
-* Confirming successful application handover
-
-This approach allows individual bootloader branches to be validated without requiring additional communication hardware.
-
----
-
-## 11. Test Evidence
-
-Test evidence is maintained separately in the project validation records.
-
-Evidence may include:
-
-* Test case results
-* GDB checkpoints
-* Variable and memory inspection
-* LED status indications
-* Screenshots
-* Firmware modification results
-* Build and execution results
-
-The validation records provide traceability between the requirement, test procedure, expected result, actual result, status, and evidence.
-
----
-
-## 12. Requirement Traceability
-
-Security requirements are mapped to corresponding verification activities.
-
-Example:
-
-```text id="eoj8ji"
-SEC-INT-002
-     |
-     v
-SHA-256 Verification
-     |
-     +------------------+
-     |                  |
-     v                  v
-TEST-INT-002       TEST-INT-003
-Active SHA         Candidate SHA
-     |
-     v
-TEST-INT-004
-SHA-256 Mismatch
-```
-
-The same approach is used for metadata validation, memory validation, application handover, candidate handling, and failure paths.
-
----
-
-## 13. Regression Testing
-
-Previously verified functionality shall be re-tested after significant changes to:
-
-* Bootloader code
-* Application code
-* Candidate Application
-* Metadata structure
-* SHA-256 implementation
-* Linker configuration
-* Flash memory layout
-* Firmware validation logic
-
-Regression testing ensures that enhancements do not break previously verified boot and validation behavior.
-
----
-
-## 14. Future Verification
-
-The following verification activities will be added during future enhancement phases:
-
-### Digital Signature Authentication
-
-* Valid signature
-* Invalid signature
-* Modified signed firmware
-* Incorrect public key
-* Invalid signature data
-* Host-side signing verification
-* Signature verification performance
-
-### Advanced FOTA
-
-* Candidate-to-active image programming
-* Persistent update-state handling
-* Pending/confirmed image handling
-* Automatic rollback
-* Power-loss recovery
-* Anti-rollback protection
-
-### Production-Oriented Verification
-
-* Extended fault-injection testing
-* Security hardening tests
-* Additional automated testing
-* Increased unit-test coverage
-* Tool-based coverage analysis
-* ISO 26262-oriented verification activities
-
----
-
-## 15. Implementation Status
-
-**Status: Core Verification Completed**
-
-The current Secure Boot and FOTA-oriented validation has been implemented and verified on the STM32F407.
-
-Verified areas include:
-
-* Bootloader startup
-* Firmware metadata validation
-* Magic-number validation
-* Firmware-size validation
-* Application memory-boundary validation
-* SHA-256 implementation and test vectors
-* SHA-256 verification of firmware stored in Flash
-* Candidate firmware verification
-* Active firmware verification
-* Candidate version comparison
-* Candidate rejection
-* Active-image fallback
-* Application vector validation
-* Application handover
-* Fail-safe handling
-
-Digital Signature Authentication, candidate-to-active activation, persistent update state, pending/confirmed handling, rollback, and advanced recovery remain future enhancements.
+The individual test sheets contain the detailed procedures, actual results, statuses, and supporting evidence. This strategy summarizes the verification approach and coverage; it does not replace those records or claim exhaustive fault coverage.
