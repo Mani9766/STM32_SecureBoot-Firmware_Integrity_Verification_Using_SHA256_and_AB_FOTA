@@ -1,249 +1,205 @@
-# Memory Architecture
 
-## 1. Overview
+# Firmware Image Layout and Validation
 
-The Secure Boot project uses dedicated Flash regions for the Bootloader, firmware metadata, candidate firmware, and active firmware.
+## 1. Purpose
 
-The Bootloader executes first after MCU reset. It validates firmware metadata and image boundaries, performs SHA-256 integrity verification, and transfers control to a validated application image.
+This document describes the firmware images used by the STM32F407 Secure Boot and A/B FOTA project, including their build addresses, storage locations, associated metadata, and integrity-validation process.
 
-The memory architecture also provides separate candidate and active firmware regions for the current FOTA-oriented validation flow.
+The project uses three firmware-image locations:
+
+- **Download / staging region:** Stores the incoming firmware image before promotion.
+- **Slot A:** Stores one executable firmware image.
+- **Slot B:** Stores the other executable firmware image.
+
+Slot A and Slot B have fixed physical addresses. Their active, previously confirmed, and candidate roles depend on the current firmware update state.
+
+Each executable firmware image must be built for its intended execution address. The Bootloader validates the staged image, programs the selected inactive slot, verifies the programmed destination image, and manages candidate trial boot and confirmation through metadata records.
+
+The implementation uses SHA-256 for firmware integrity verification. Digital-signature-based firmware authenticity verification is outside the current project scope.
 
 ---
 
-## 2. Flash Memory Layout
+## 2. Firmware Image Locations
 
-The current STM32F407 internal Flash organization is:
+| Image location | Flash sector | Start address | Purpose |
+|---|---|---|---|
+| Download / staging | Sector 4 | `0x08010000` | Holds incoming firmware for validation and promotion. |
+| Firmware Slot A | Sector 5 | `0x08020000` | Executable firmware image A. |
+| Firmware Slot B | Sector 6 | `0x08040000` | Executable firmware image B. |
+
+The configured regions are:
+
+- **Staging:** `0x08010000 – 0x0801FFFF`
+- **Slot A:** `0x08020000 – 0x0803FFFF`
+- **Slot B:** `0x08040000 – 0x0805FFFF`
+
+The usable image size is constrained by the configured linker layout and the Bootloader's image-size and memory-boundary checks.
+
+---
+
+## 3. Download / Staging Firmware Region
+
+The staging region holds incoming firmware before promotion into an executable firmware slot.
+
+- **Start address:** `0x08010000`
+- **End address:** `0x0801FFFF`
+- **Flash sector:** Sector 4
+- **Purpose:** Stores firmware for validation and subsequent programming into the selected inactive slot.
+
+The update workflow uses staging metadata and image information to validate the candidate before destination programming.
+
+The Bootloader performs the applicable checks, including:
+
+- Metadata validity
+- Firmware image size and memory boundaries
+- Firmware version policy
+- SHA-256 integrity verification
+
+When the staged image passes validation, the Bootloader selects the inactive executable slot, erases the relevant destination region, and programs the staged image into that slot.
+
+The SHA-256 digest of the programmed destination image is then independently calculated and compared with the expected digest.
+
+A matching destination digest allows the update workflow to proceed to the `BOOT_PENDING` state. The candidate is then selected for trial boot from its executable slot, not directly from the staging region.
+
+An invalid staged image is rejected and is not selected for trial boot.
+
+---
+
+## 4. Executable Firmware Slots
+
+The architecture provides two executable firmware slots.
+
+### Slot A
+
+- **Start address:** `0x08020000`
+- **End address:** `0x0803FFFF`
+- **Flash sector:** Sector 5
+- **Purpose:** Stores executable firmware Slot A.
+
+### Slot B
+
+- **Start address:** `0x08040000`
+- **End address:** `0x0805FFFF`
+- **Flash sector:** Sector 6
+- **Purpose:** Stores executable firmware Slot B.
+
+Slot A and Slot B are physical locations. The currently confirmed and candidate roles are determined by the metadata state and update policy.
+
+The Bootloader validates the selected image metadata, image boundaries, SHA-256 digest, and application handover information before transferring control to the application.
+
+### Trial Boot and Confirmation
+
+After the inactive slot has been programmed and its destination SHA-256 digest verified, the Bootloader records `BOOT_PENDING` in the applicable metadata journal and selects the candidate for trial boot.
+
+The candidate application is expected to confirm successful startup by calling `Firmware_Confirm()`. A successful confirmation appends a `CONFIRMED` metadata record.
+
+If the candidate remains unconfirmed after a reset, the Bootloader uses the recorded state to return to the previously confirmed firmware according to the implemented recovery policy.
+
+The current implementation has been tested for the documented candidate confirmation and watchdog-reset rollback scenarios.
+
+---
+
+## 5. Vector Table and Application Handover
+
+The Bootloader and executable applications use their respective vector tables.
+
+The Bootloader begins execution from the boot memory region. Before transferring control to an application, the Bootloader validates the application image and configures the Vector Table Offset Register (VTOR) for the selected executable slot.
+
+### Executable Vector Table Locations
 
 ```text
-STM32F407 Internal Flash
-
-┌──────────────┬──────────────┬────────────────────────────┐
-│   ADDRESS    │    SECTOR    │           ROLE             │
-├──────────────┼──────────────┼────────────────────────────┤
-│ 0x08000000   │   Sector 0   │ Bootloader                 │
-│ 0x08004000   │   Sector 1   │ Bootloader                 │
-│ 0x08008000   │   Sector 2   │ Active Image Metadata      │
-│ 0x0800C000   │   Sector 3   │ Candidate Image Metadata  │
-│ 0x08010000   │   Sector 4   │ Candidate Firmware        │
-│ 0x08020000   │   Sector 5   │ Active Firmware           │
-│ 0x08040000   │   Sector 6   │ Active Firmware           │
-│ 0x08060000   │   Sector 7   │ Active Firmware           │
-│ 0x08080000   │   Sector 8   │ Available / Reserved      │
-│ 0x080A0000   │   Sector 9   │ Available / Reserved      │
-│ 0x080C0000   │   Sector 10  │ Available / Reserved      │
-│ 0x080E0000   │   Sector 11  │ Available / Reserved      │
-├──────────────┴──────────────┴────────────────────────────┤
-│ 0x080FFFFF   │            Flash End Address              │
-└─────────────────────────────────────────────────────────┘
+Bootloader Vector Table  -> 0x08000000
+Slot A Vector Table      -> 0x08020000
+Slot B Vector Table      -> 0x08040000
 ```
 
-### Key Memory Boundaries
+The staging region starts at `0x08010000`, but that is the storage address of the incoming image, not the executable vector-table address used for Slot A or Slot B trial boot.
 
-* **Bootloader:** `0x08000000 – 0x08007FFF`
-* **Active Metadata:** `0x08008000 – 0x0800BFFF`
-* **Candidate Metadata:** `0x0800C000 – 0x0800FFFF`
-* **Candidate Firmware:** `0x08010000 – 0x0801FFFF`
-* **Active Firmware:** starts at `0x08020000`
-* **Flash End:** `0x080FFFFF`
+The Bootloader obtains the application's initial stack pointer and reset-handler address from the selected executable image. It validates the applicable address constraints before transferring control to the application's reset handler.
 
-The candidate and active firmware images are intentionally stored at different Flash locations so that the active firmware remains available while the candidate image is being validated.
+The executable firmware build and its vector-table configuration must correspond to the slot address at which that firmware will run.
 
 ---
 
-## 3. Bootloader Region
+## 6. Linker Script Configuration
 
-The Bootloader occupies dedicated Flash memory in Sectors 0 and 1.
+The project uses linker configurations for the Bootloader and executable firmware images.
 
-### Responsibilities
+The relevant configurations define:
 
-* MCU startup handling
-* Firmware metadata handling
-* Application image validation
-* Firmware version validation
-* SHA-256 integrity verification
-* Candidate image validation
-* Active-image fallback
-* Failure handling
-* Application handover
+- Flash origin and length
+- RAM origin and length
+- Code and read-only data sections
+- Initialized and uninitialized data sections
+- Stack and heap settings, where configured
+- Application vector-table location
 
-The Bootloader region is separated from the firmware image regions and is not part of the application integrity calculation.
+Executable firmware must be built for its intended execution address. Slot A firmware uses the Slot A address, and Slot B firmware uses the Slot B address.
 
----
+The staging region holds the incoming image before it is programmed into an executable slot. Staging storage must not be confused with the destination address for application execution.
 
-## 4. Metadata Regions
-
-Metadata is stored separately from the firmware images.
-
-### Active Image Metadata
-
-* **Flash sector:** Sector 2
-* **Base address:** `0x08008000`
-* **Purpose:** Stores metadata describing the active firmware image
-
-### Candidate Image Metadata
-
-* **Flash sector:** Sector 3
-* **Base address:** `0x0800C000`
-* **Purpose:** Stores metadata describing the candidate firmware image
-
-The metadata contains information required by the Bootloader for image validation, including:
-
-* Firmware metadata magic value
-* Firmware image size
-* Firmware version
-* SHA-256 reference digest
-
-Metadata is validated before the corresponding firmware image is processed.
+The linker configuration and Bootloader validation rules must consistently enforce the intended Flash and RAM boundaries.
 
 ---
 
-## 5. Candidate Firmware Region
+## 7. Memory Validation and Integrity Protection
 
-The candidate firmware is stored separately from the active firmware.
+The current memory architecture and Bootloader validation logic provide the following mechanisms:
 
-* **Start address:** `0x08010000`
-* **Region:** Sector 4
-* **Purpose:** Stores a candidate firmware image for FOTA validation
+- Separation of Bootloader, metadata, staging, and executable firmware regions.
+- Fixed physical locations for Slot A and Slot B.
+- Separate metadata sectors for the two executable slots.
+- Known image start addresses and configured image-size limits.
+- Firmware image boundary validation.
+- Firmware version checks in the update workflow.
+- Metadata validation before firmware selection.
+- SHA-256 verification of the staged image.
+- SHA-256 verification of the programmed destination image.
+- Reset-handler validation before application handover.
+- Candidate trial boot, explicit confirmation, and the implemented rollback policy.
 
-The Bootloader validates the candidate metadata, verifies the image boundaries, checks the firmware version, independently calculates the candidate SHA-256 digest, and compares it with the digest stored in candidate metadata.
+Additional hardware memory-protection mechanisms may be considered separately if required by a future deployment context.
 
-A valid candidate is currently executed directly from the candidate Flash location.
-
-Candidate-to-active image programming is not part of the current implementation and is planned as a future FOTA enhancement.
-
----
-
-## 6. Active Firmware Region
-
-The active firmware is stored starting from:
-
-* **Start address:** `0x08020000`
-* **Region:** Sector 5 and subsequent available firmware sectors
-
-The active firmware is the primary fallback image used by the Bootloader.
-
-Before execution, the Bootloader validates the active metadata and independently calculates the SHA-256 digest of the active firmware.
-
-The active application is executed only when the required validation and integrity checks succeed.
+The SHA-256 mechanism verifies that an image matches the expected digest stored in metadata. It does not, by itself, establish firmware authenticity or protect the expected digest against unauthorized modification.
 
 ---
 
-## 7. Vector Table
+## 8. Known Design Limitations and Out-of-Scope Enhancements
 
-The Bootloader and application firmware each have their own vector tables.
+The current project release includes metadata-driven update state management, candidate-to-slot programming, trial boot, application confirmation, and the documented recovery behavior.
 
-The Bootloader starts execution using its own vector table.
+The following capabilities are not claimed as implemented security features:
 
-Before transferring control to an application, the Bootloader configures the Vector Table Offset Register (VTOR) to the application's vector table address.
+- **Firmware authenticity:** Digital-signature verification and trusted-key management.
+- **Authenticated metadata:** Cryptographic protection of security-relevant metadata and reference digests against unauthorized modification.
+- **Cryptographically enforced anti-rollback protection:** The update workflow includes firmware version checks, but a protected monotonic version mechanism is not claimed.
+- **Production firmware download:** The current workflow uses a demonstration trigger and staged firmware rather than a complete production communication and download mechanism.
+- **Automatic alternate-slot fallback for active-image corruption:** The current selected-active-image SHA-256 mismatch path enters BootSafe/fail-safe behavior.
+- **Actual power-loss resilience:** The tested debugger-reset recovery scenario does not establish resilience to actual power interruption during Flash programming or metadata writes.
 
-Conceptually:
-
-```text
-Bootloader Vector Table
-        |
-        v
-Bootloader Execution
-        |
-        | Validate Image
-        |
-        v
-Application Vector Table
-        |
-        v
-Application Reset Handler
-        |
-        v
-Application Execution
-```
-
-For the current firmware layout:
-
-```text
-Candidate Vector Table → 0x08010000
-Active Vector Table    → 0x08020000
-```
-
-The Bootloader also validates the application's initial stack pointer and reset-handler address before performing the application handover.
+These are documented boundaries of the current project scope, not pending implementation or testing tasks for this release.
 
 ---
 
-## 8. Linker Script Configuration
+## 9. Implementation and Verification Status
 
-Separate linker configurations are used for the Bootloader, Candidate Application, and Active Application.
+**Status: Implemented and functionally verified for the documented project scope**
 
-The linker scripts define:
+The memory layout, firmware metadata handling, image validation, SHA-256 verification, destination programming, and A/B update behavior have been exercised through the project's documented functional and recovery test cases.
 
-* Flash origin
-* Flash length
-* RAM origin
-* RAM length
-* Code sections
-* Read-only data
-* Initialized data
-* Uninitialized data
-* Stack
-* Heap
+Verification evidence includes debugger observations, ITM output, firmware version and metadata-state output, and LED indications where applicable.
 
-The Candidate Application and Active Application use different Flash origins because they are executed from different memory locations.
+### Current Memory Addresses
 
-The application linker configuration must ensure that the application image remains within its assigned Flash region and cannot overwrite the Bootloader or metadata regions.
+- **Bootloader start:** `0x08000000`
+- **Slot A metadata:** `0x08008000`
+- **Slot B metadata:** `0x0800C000`
+- **Download / staging firmware:** `0x08010000`
+- **Executable firmware Slot A:** `0x08020000`
+- **Executable firmware Slot B:** `0x08040000`
+- **Flash end:** `0x080FFFFF`
 
----
+The project demonstrates the use of a dedicated staging region, two executable firmware slots, metadata-driven update states, SHA-256 integrity verification, candidate confirmation, and recovery to previously confirmed firmware for the documented failure scenarios.
 
-## 9. Memory Protection and Validation
+This status reflects the implemented functionality and recorded test evidence. It does not imply exhaustive fault coverage, firmware authenticity, or formal standards compliance.
 
-The memory architecture ensures that:
-
-* Bootloader and application regions are separated.
-* Active and candidate firmware are stored independently.
-* Metadata is stored in dedicated Flash sectors.
-* Firmware images are processed using known start addresses.
-* Image sizes are validated against the configured memory boundaries.
-* The Bootloader validates the application reset-handler address before handover.
-* Firmware integrity verification operates on the intended Flash image region.
-
-Additional hardware memory-protection mechanisms may be considered during future security hardening.
-
----
-
-## 10. Current Design Considerations
-
-The current implementation intentionally separates:
-
-* Bootloader
-* Active firmware metadata
-* Candidate firmware metadata
-* Candidate firmware
-* Active firmware
-
-The following mechanisms are outside the current memory-management scope and are planned for future enhancement:
-
-* Candidate-to-active image programming
-* Persistent update-state storage
-* Pending/confirmed image state
-* Rollback storage or swap area
-* Power-loss-resilient update handling
-* Digital signature metadata and key management
-
-These mechanisms can be added later without changing the fundamental separation between the Bootloader, candidate image, and active image regions.
-
----
-
-## 11. Implementation Status
-
-**Status: Implemented and Verified**
-
-The current memory architecture has been implemented and validated with the STM32F407 firmware projects.
-
-### Current Addresses
-
-* **Bootloader start:** `0x08000000`
-* **Active metadata:** `0x08008000`
-* **Candidate metadata:** `0x0800C000`
-* **Candidate firmware:** `0x08010000`
-* **Active firmware:** `0x08020000`
-* **Flash end:** `0x080FFFFF`
-
-The linker configurations and application vector-table locations have been configured accordingly.
-
-The current implementation supports independent candidate and active firmware validation using metadata and SHA-256 integrity verification.
