@@ -1,169 +1,187 @@
-# Candidate Update State Machine
+# Persistent FOTA Update State Machine
 
 ## 1. Purpose
 
-This document defines the planned persistent update-state mechanism for the future production-oriented FOTA enhancement.
+This document defines the planned persistent update-state mechanism for the future production-oriented FOTA enhancement of the STM32F407 Secure Boot project.
 
-The current FOTA implementation does not use persistent update-state handling. The state machine described here will be introduced after Digital Signature Authentication and candidate-to-active firmware activation are implemented.
+The current implementation supports firmware metadata validation, SHA-256 integrity verification, candidate/active image management, candidate rejection, active-image fallback, and fail-safe handling. It does not yet implement the persistent trial-boot, confirmation, and rollback state machine described here.
 
-The purpose of the state machine is to track the candidate firmware lifecycle across resets and determine whether the newly activated firmware should remain active or be rolled back.
+The state machine will be developed as a separate enhancement, following digital signature authentication and candidate-to-active activation design.
 
----
+Its purpose is to track firmware update progress across resets, manage candidate firmware trial execution, record application confirmation, and recover to a verified known-good firmware image when an update fails.
 
 ## 2. Candidate Update State Machine
 
 ```mermaid
 stateDiagram-v2
-
     [*] --> EMPTY
 
-    EMPTY --> PENDING_VALIDATION : New candidate installed
+    EMPTY --> PENDING_VALIDATION : Candidate installed
 
-    PENDING_VALIDATION --> VALIDATED : SHA-256 / signature validation successful
+    PENDING_VALIDATION --> VALIDATED : Required checks pass
+    PENDING_VALIDATION --> INVALID : Validation fails
 
-    VALIDATED --> BOOT_PENDING : Candidate approved for activation
+    VALIDATED --> BOOT_PENDING : Candidate approved for trial
 
-    BOOT_PENDING --> CANDIDATE_IMAGE : Execute candidate image
+    BOOT_PENDING --> TRIAL_BOOT : Record attempt and boot candidate
 
-    CANDIDATE_IMAGE --> CONFIRMED : Application confirms successful startup
+    TRIAL_BOOT --> CONFIRMED : Application confirms startup
+    TRIAL_BOOT --> BOOT_PENDING : Retry permitted after reset
+    TRIAL_BOOT --> ROLLBACK : Retry limit reached or failure detected
 
-    CANDIDATE_IMAGE --> ROLLBACK : Reset without confirmation
+    BOOT_PENDING --> ROLLBACK : Invalid trial state or attempts exhausted
 
-    BOOT_PENDING --> ROLLBACK : Candidate not confirmed after reset
+    CONFIRMED --> ACTIVE_IMAGE : Candidate becomes confirmed active firmware
 
-    ROLLBACK --> ACTIVE_IMAGE : Restore / boot previous active image
+    ROLLBACK --> ACTIVE_IMAGE : Verify and boot previous known-good image
 
-    CONFIRMED --> CANDIDATE_IMAGE : Continue using confirmed image
+    INVALID --> ACTIVE_IMAGE : Verify and boot previous known-good image
 
-    INVALID --> ACTIVE_IMAGE : Invalid or unknown state
+    EMPTY --> ACTIVE_IMAGE : No update pending
+
+    ACTIVE_IMAGE --> PENDING_VALIDATION : New candidate installed
 ```
 
----
+The final implementation must define retry limits, reset detection, confirmation deadlines, and the conditions that cause rollback. The diagram represents the planned behavior rather than implemented functionality.
 
 ## 3. State Definitions
 
-| State                | Meaning                                                                    |
-| -------------------- | -------------------------------------------------------------------------- |
-| `EMPTY`              | No candidate update is pending                                             |
-| `PENDING_VALIDATION` | Candidate firmware has been installed and is waiting for validation        |
-| `VALIDATED`          | Candidate firmware has passed the required integrity/authentication checks |
-| `BOOT_PENDING`       | Candidate firmware is approved for trial activation                        |
-| `CANDIDATE_IMAGE`    | Candidate firmware is currently being executed                             |
-| `CONFIRMED`          | Candidate firmware has been successfully confirmed by the application      |
-| `ROLLBACK`           | Candidate firmware failed to boot successfully or was not confirmed        |
-| `INVALID`            | Stored update state is invalid or unknown                                  |
-| `ACTIVE_IMAGE`       | Previous known-good firmware is executed                                   |
+| State | Meaning |
+|---|---|
+| `EMPTY` | No candidate update is pending |
+| `PENDING_VALIDATION` | A candidate image has been installed and awaits validation |
+| `VALIDATED` | The candidate has passed the required integrity and, when implemented, authenticity checks |
+| `BOOT_PENDING` | The candidate is approved for trial execution |
+| `TRIAL_BOOT` | The candidate is executing provisionally and has not yet been confirmed |
+| `CONFIRMED` | The application has successfully confirmed startup and the confirmation has been persisted |
+| `ROLLBACK` | The candidate has failed the defined trial-boot policy, and recovery to the previous image is required |
+| `INVALID` | Persistent update metadata or state is invalid or inconsistent |
+| `ACTIVE_IMAGE` | The verified firmware image selected for normal execution; during a trial this remains the previous known-good image |
 
----
+## 4. Main Update Flow
 
-## 4. Main Flow
+The planned update lifecycle is:
 
 ```text
 EMPTY
-  ↓
+  |
+  v
 PENDING_VALIDATION
-  ↓
+  |
+  v
 VALIDATED
-  ↓
+  |
+  v
 BOOT_PENDING
-  ↓
-CANDIDATE_IMAGE
-  ↓
+  |
+  v
+TRIAL_BOOT
+  |
+  v
 Application Confirmation
-  ↓
+  |
+  v
 CONFIRMED
+  |
+  v
+Confirmed Active Firmware
 ```
 
----
+Before trial execution, the bootloader must persist the trial state and attempt information so that a reset does not accidentally turn an unconfirmed candidate into a confirmed image.
 
-## 5. Candidate Boot Failure
+## 5. Candidate Boot Failure and Rollback
 
 ```text
 BOOT_PENDING
-      ↓
-CANDIDATE_IMAGE
-      ↓
-Reset / No Confirmation
-      ↓
-ROLLBACK
-      ↓
-ACTIVE_IMAGE
+     |
+     v
+TRIAL_BOOT
+     |
+     v
+Reset / Timeout / Startup Failure
+     |
+     v
+Evaluate Retry Policy
+     |
+     +---- Retry permitted ----> BOOT_PENDING
+     |
+     +---- Retry exhausted ----> ROLLBACK
+                                      |
+                                      v
+                            Verify Previous Image
+                                      |
+                                      v
+                               ACTIVE_IMAGE
 ```
 
-The Bootloader will use the persistent update state to determine that the candidate firmware was not successfully confirmed and will revert to the previous known-good firmware.
+A reset is not automatically proof of firmware failure. The bootloader will evaluate the persistent trial state and boot-attempt policy to determine whether another trial is permitted or rollback is required.
 
----
+The previous known-good image must remain intact until the candidate is successfully confirmed. Before booting it, the bootloader must verify its metadata, memory boundaries, and firmware integrity.
 
 ## 6. Candidate Confirmation
 
-After the candidate firmware starts successfully, the application will provide an explicit confirmation.
+After successful startup, the application will explicitly request confirmation through a defined bootloader/application interface.
 
-```text
-CANDIDATE_IMAGE
-      ↓
-Application Startup
-      ↓
-Application Confirmation
-      ↓
-CONFIRMED
-```
+The bootloader or trusted update-management component will validate the confirmation request and persist the confirmed state.
 
-The confirmation state must be stored persistently so that it survives subsequent resets.
+The design must address:
 
----
+- Confirmation-interface validation
+- Persistent confirmation recording
+- Reset or power loss during confirmation
+- Duplicate or stale confirmation requests
+- Consistency between image metadata and update state
 
-## 7. Invalid State Handling
+The exact confirmation mechanism will be determined during implementation.
 
-An unexpected or invalid persistent state shall not cause the Bootloader to execute an unknown firmware image.
+## 7. Invalid State and Recovery Handling
 
-```text
-INVALID
-   ↓
-ACTIVE_IMAGE
-```
+An invalid, corrupted, or inconsistent persistent state must never authorize execution of an unverified firmware image.
 
-The Bootloader will fall back to the previous known-good image or enter the defined recovery path according to the final implementation.
+The bootloader will attempt to identify and verify the previous known-good image. If that image is unavailable or fails validation, the system must enter a defined fail-safe or recovery path rather than blindly executing it.
 
----
+Persistent state integrity, interrupted Flash writes, and recovery behavior will be addressed during implementation and fault-injection testing.
 
-## 8. Persistent Storage
+## 8. Persistent Storage Design
 
-The future implementation will allocate a dedicated non-volatile storage area for update-state information.
+A dedicated non-volatile storage arrangement will be defined for update-state information.
 
-The persistent state may include information such as:
+The proposed record may include:
 
-* Current update state
-* Candidate image identifier
-* Firmware version
-* Boot-attempt information
-* Confirmation status
-* Recovery information
+- Update-state identifier
+- Candidate image identifier and location
+- Firmware version
+- Candidate image size and integrity reference
+- Boot-attempt counter
+- Confirmation status
+- Record sequence number
+- Record validity or commit marker
 
-The exact storage format and Flash allocation will be defined during the FOTA enhancement phase.
+Storage allocation, record format, atomic update strategy, wear management, and corruption recovery will be finalized during the implementation phase.
 
----
+Persistent state must not be treated as trustworthy merely because it survives a reset. Records must be checked for validity and consistency with the corresponding firmware metadata.
 
 ## 9. Design Considerations
 
-The state machine will support:
+The future implementation will address:
 
-* Trial boot of newly activated firmware
-* Explicit application confirmation
-* State persistence across reset
-* Detection of unsuccessful candidate boots
-* Automatic rollback
-* Recovery from interrupted updates
-* Power-loss resilience
-* Integration with authenticated firmware activation
+- Trial boot of candidate firmware
+- Explicit application confirmation
+- State persistence across reset and power loss
+- Bounded boot attempts
+- Automatic rollback to a verified known-good image
+- Recovery from interrupted updates
+- Consistent firmware and update-state metadata
+- Authenticated firmware activation after signature verification is implemented
+- Anti-rollback policy and version enforcement
+- Flash-write integrity and atomic state transitions
 
-The implementation will be designed so that an unconfirmed candidate cannot permanently replace the known-good firmware without successful confirmation.
-
----
+The previous known-good firmware will be preserved until the candidate is confirmed. Update-state transitions must be designed to avoid leaving the system without a bootable, verified recovery image.
 
 ## 10. Implementation Status
 
-**Status: Planned Future Enhancement**
+**Status: Planned Future Enhancement — Design Specification**
 
-This state machine is currently a design specification only.
+This document describes the intended persistent FOTA state machine. It is not evidence that persistent trial-boot management, application confirmation, candidate-to-active activation, automatic rollback, or power-loss recovery has already been implemented.
 
-Persistent update-state handling, pending/confirmed image management, candidate-to-active activation, rollback, and power-loss recovery will be implemented after Digital Signature Authentication as part of the production-oriented FOTA enhancement phase.
+These capabilities will be developed and verified as part of the future production-oriented FOTA enhancement. Digital signature authentication remains a separate planned security enhancement.
